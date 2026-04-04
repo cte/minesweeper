@@ -13,7 +13,11 @@
     "research:loop": "tsx src/research-loop.ts",
     "research:codex-edit": "tsx src/research-codex.ts",
     "research:loop:codex": "tsx src/research-loop-codex.ts",
-    "check": "tsc --noEmit"
+    "research:dashboard": "tsx src/research-dashboard.ts",
+    "check": "pnpm --filter @autoresearch/runtime check && tsc --noEmit"
+  },
+  "dependencies": {
+    "@autoresearch/runtime": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",

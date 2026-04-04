@@ -64,6 +64,14 @@ pnpm research:loop -- \
 
 That command will write context and prompt files under `.autoresearch/`, invoke the editor command, and feed the result into `research:trial`.
 
+If you want a live view while the loop runs, start:
+
+```bash
+pnpm research:dashboard
+```
+
+The dashboard reads `.autoresearch/state.json`, `.autoresearch/events.jsonl`, `.autoresearch/current-codex.log`, and the results store to show the loop status in real time.
+
 If you want to use Codex directly, use:
 
 ```bash

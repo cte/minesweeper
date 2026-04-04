@@ -93,7 +93,7 @@ The benchmark definitions live in `bench/`.
 
 ## Experiment Log
 
-`pnpm record` evaluates the current solver on the main benchmark and the holdout benchmark, then appends a row to `results.tsv`.
+`pnpm record` evaluates the current solver on the main benchmark and the holdout benchmark, then appends a human-readable summary to `results.tsv` and a structured record to `.autoresearch/results.jsonl`.
 
 The log is created automatically on first use and includes:
 
@@ -101,6 +101,12 @@ The log is created automatically on first use and includes:
 - whether the worktree was dirty
 - eval and holdout metrics
 - a free-form description
+
+The reusable research runtime now lives in [packages/autoresearch](/Users/cte/Documents/Workspace/minesweeper-ts/packages/autoresearch). The Minesweeper app only provides:
+
+- the benchmark commands in `src/score.ts`
+- the editable target in `src/solver.ts`
+- a thin project config in `src/autoresearch.ts`
 
 ## Branch Workflow
 
@@ -153,6 +159,20 @@ The loop also keeps per-iteration transcript files under:
 ```bash
 .autoresearch/transcripts/0001.log
 ```
+
+For a live browser view of the run, start:
+
+```bash
+pnpm research:dashboard
+```
+
+That serves a real-time dashboard with:
+
+- current loop status
+- best and latest scores
+- recent decisions
+- structured event history
+- the live Codex transcript tail
 
 ## Codex Backend
 
