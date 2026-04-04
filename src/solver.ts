@@ -1,5 +1,12 @@
 import type { CellView, GameView, Move, Position, Solver } from "./types.js";
 
+interface ClueState {
+  cell: CellView;
+  hidden: CellView[];
+  hiddenKeys: Set<string>;
+  minesLeft: number;
+}
+
 function neighbors(view: GameView, x: number, y: number): CellView[] {
   const result: CellView[] = [];
   for (let dy = -1; dy <= 1; dy += 1) {
@@ -24,6 +31,19 @@ function chooseCenter(view: GameView): Move {
     y: Math.floor(view.height / 2),
     reason: "open center first",
   };
+}
+
+function positionKey(pos: Position): string {
+  return `${pos.x},${pos.y}`;
+}
+
+function isSubset(subset: Set<string>, superset: Set<string>): boolean {
+  for (const key of subset) {
+    if (!superset.has(key)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function scoreHiddenCell(view: GameView, pos: Position): number {
@@ -60,6 +80,7 @@ export class BaselineSolver implements Solver {
   }
 
   private findForcedMove(view: GameView): Move | null {
+    const clueStates: ClueState[] = [];
     for (const row of view.board) {
       for (const cell of row) {
         if (!cell.revealed || cell.adjacentMines === null || cell.adjacentMines === 0) {
@@ -87,6 +108,51 @@ export class BaselineSolver implements Solver {
             x: target.x,
             y: target.y,
             reason: `forced mine from clue ${cell.x},${cell.y}`,
+          };
+        }
+
+        if (minesLeft > 0 && minesLeft < hidden.length) {
+          clueStates.push({
+            cell,
+            hidden,
+            hiddenKeys: new Set(hidden.map((neighbor) => positionKey(neighbor))),
+            minesLeft,
+          });
+        }
+      }
+    }
+
+    for (const subsetClue of clueStates) {
+      for (const supersetClue of clueStates) {
+        if (subsetClue === supersetClue || subsetClue.hidden.length >= supersetClue.hidden.length) {
+          continue;
+        }
+        if (!isSubset(subsetClue.hiddenKeys, supersetClue.hiddenKeys)) {
+          continue;
+        }
+
+        const difference = supersetClue.hidden.filter((neighbor) => !subsetClue.hiddenKeys.has(positionKey(neighbor)));
+        const extraMines = supersetClue.minesLeft - subsetClue.minesLeft;
+        if (difference.length === 0 || extraMines < 0 || extraMines > difference.length) {
+          continue;
+        }
+
+        const target = difference[0]!;
+        if (extraMines === 0) {
+          return {
+            kind: "reveal",
+            x: target.x,
+            y: target.y,
+            reason: `safe from clue subset ${subsetClue.cell.x},${subsetClue.cell.y} in ${supersetClue.cell.x},${supersetClue.cell.y}`,
+          };
+        }
+
+        if (extraMines === difference.length) {
+          return {
+            kind: "flag",
+            x: target.x,
+            y: target.y,
+            reason: `forced mine from clue subset ${subsetClue.cell.x},${subsetClue.cell.y} in ${supersetClue.cell.x},${supersetClue.cell.y}`,
           };
         }
       }
