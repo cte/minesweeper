@@ -37,13 +37,106 @@ function positionKey(pos: Position): string {
   return `${pos.x},${pos.y}`;
 }
 
-function isSubset(subset: Set<string>, superset: Set<string>): boolean {
-  for (const key of subset) {
-    if (!superset.has(key)) {
-      return false;
+function comparePositions(a: Position, b: Position): number {
+  return a.y - b.y || a.x - b.x;
+}
+
+function pickFirstCell(cells: CellView[]): CellView {
+  let best = cells[0]!;
+  for (let index = 1; index < cells.length; index += 1) {
+    const cell = cells[index]!;
+    if (comparePositions(cell, best) < 0) {
+      best = cell;
     }
   }
-  return true;
+  return best;
+}
+
+function findPairwiseOverlapMove(first: ClueState, second: ClueState): Move | null {
+  const firstOnly: CellView[] = [];
+  const overlap: CellView[] = [];
+  for (const cell of first.hidden) {
+    if (second.hiddenKeys.has(positionKey(cell))) {
+      overlap.push(cell);
+    } else {
+      firstOnly.push(cell);
+    }
+  }
+  const secondOnly = second.hidden.filter((cell) => !first.hiddenKeys.has(positionKey(cell)));
+
+  const minOverlapMines = Math.max(0, first.minesLeft - firstOnly.length, second.minesLeft - secondOnly.length);
+  const maxOverlapMines = Math.min(overlap.length, first.minesLeft, second.minesLeft);
+  if (minOverlapMines > maxOverlapMines) {
+    return null;
+  }
+
+  const firstOnlyMinMines = first.minesLeft - maxOverlapMines;
+  const firstOnlyMaxMines = first.minesLeft - minOverlapMines;
+  const secondOnlyMinMines = second.minesLeft - maxOverlapMines;
+  const secondOnlyMaxMines = second.minesLeft - minOverlapMines;
+  const pairLabel = `${first.cell.x},${first.cell.y} & ${second.cell.x},${second.cell.y}`;
+
+  if (firstOnly.length > 0 && firstOnlyMaxMines === 0) {
+    const target = pickFirstCell(firstOnly);
+    return {
+      kind: "reveal",
+      x: target.x,
+      y: target.y,
+      reason: `safe from clue pair ${pairLabel}`,
+    };
+  }
+
+  if (secondOnly.length > 0 && secondOnlyMaxMines === 0) {
+    const target = pickFirstCell(secondOnly);
+    return {
+      kind: "reveal",
+      x: target.x,
+      y: target.y,
+      reason: `safe from clue pair ${pairLabel}`,
+    };
+  }
+
+  if (overlap.length > 0 && maxOverlapMines === 0) {
+    const target = pickFirstCell(overlap);
+    return {
+      kind: "reveal",
+      x: target.x,
+      y: target.y,
+      reason: `safe from clue pair ${pairLabel}`,
+    };
+  }
+
+  if (firstOnly.length > 0 && firstOnlyMinMines === firstOnly.length) {
+    const target = pickFirstCell(firstOnly);
+    return {
+      kind: "flag",
+      x: target.x,
+      y: target.y,
+      reason: `forced mine from clue pair ${pairLabel}`,
+    };
+  }
+
+  if (secondOnly.length > 0 && secondOnlyMinMines === secondOnly.length) {
+    const target = pickFirstCell(secondOnly);
+    return {
+      kind: "flag",
+      x: target.x,
+      y: target.y,
+      reason: `forced mine from clue pair ${pairLabel}`,
+    };
+  }
+
+  if (overlap.length > 0 && minOverlapMines === overlap.length) {
+    const target = pickFirstCell(overlap);
+    return {
+      kind: "flag",
+      x: target.x,
+      y: target.y,
+      reason: `forced mine from clue pair ${pairLabel}`,
+    };
+  }
+
+  return null;
 }
 
 function scoreHiddenCell(view: GameView, pos: Position): number {
@@ -122,38 +215,11 @@ export class BaselineSolver implements Solver {
       }
     }
 
-    for (const subsetClue of clueStates) {
-      for (const supersetClue of clueStates) {
-        if (subsetClue === supersetClue || subsetClue.hidden.length >= supersetClue.hidden.length) {
-          continue;
-        }
-        if (!isSubset(subsetClue.hiddenKeys, supersetClue.hiddenKeys)) {
-          continue;
-        }
-
-        const difference = supersetClue.hidden.filter((neighbor) => !subsetClue.hiddenKeys.has(positionKey(neighbor)));
-        const extraMines = supersetClue.minesLeft - subsetClue.minesLeft;
-        if (difference.length === 0 || extraMines < 0 || extraMines > difference.length) {
-          continue;
-        }
-
-        const target = difference[0]!;
-        if (extraMines === 0) {
-          return {
-            kind: "reveal",
-            x: target.x,
-            y: target.y,
-            reason: `safe from clue subset ${subsetClue.cell.x},${subsetClue.cell.y} in ${supersetClue.cell.x},${supersetClue.cell.y}`,
-          };
-        }
-
-        if (extraMines === difference.length) {
-          return {
-            kind: "flag",
-            x: target.x,
-            y: target.y,
-            reason: `forced mine from clue subset ${subsetClue.cell.x},${subsetClue.cell.y} in ${supersetClue.cell.x},${supersetClue.cell.y}`,
-          };
+    for (let firstIndex = 0; firstIndex < clueStates.length; firstIndex += 1) {
+      for (let secondIndex = firstIndex + 1; secondIndex < clueStates.length; secondIndex += 1) {
+        const move = findPairwiseOverlapMove(clueStates[firstIndex]!, clueStates[secondIndex]!);
+        if (move) {
+          return move;
         }
       }
     }
