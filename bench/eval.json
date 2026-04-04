@@ -1,0 +1,33 @@
+{
+  "name": "eval-v1",
+  "description": "Primary optimization benchmark with fixed seeded beginner, intermediate, and expert boards.",
+  "suites": [
+    {
+      "label": "beginner",
+      "width": 9,
+      "height": 9,
+      "mines": 10,
+      "seedPrefix": "eval-beginner",
+      "start": 1,
+      "count": 24
+    },
+    {
+      "label": "intermediate",
+      "width": 16,
+      "height": 16,
+      "mines": 40,
+      "seedPrefix": "eval-intermediate",
+      "start": 1,
+      "count": 24
+    },
+    {
+      "label": "expert",
+      "width": 30,
+      "height": 16,
+      "mines": 99,
+      "seedPrefix": "eval-expert",
+      "start": 1,
+      "count": 24
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "name": "minesweeper-ts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "play": "tsx src/cli.ts",
+    "score": "tsx src/score.ts",
+    "score:holdout": "tsx src/score.ts --benchmark bench/holdout.json",
+    "record": "tsx src/record.ts",
+    "research:init": "tsx src/research-init.ts",
+    "research:trial": "tsx src/research-trial.ts",
+    "research:loop": "tsx src/research-loop.ts",
+    "research:codex-edit": "tsx src/research-codex.ts",
+    "research:loop:codex": "tsx src/research-loop-codex.ts",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "holdout-v1",
+  "description": "Secondary benchmark for checking whether changes generalize beyond the main eval set.",
+  "suites": [
+    {
+      "label": "beginner",
+      "width": 9,
+      "height": 9,
+      "mines": 10,
+      "seedPrefix": "holdout-beginner",
+      "start": 101,
+      "count": 12
+    },
+    {
+      "label": "intermediate",
+      "width": 16,
+      "height": 16,
+      "mines": 40,
+      "seedPrefix": "holdout-intermediate",
+      "start": 101,
+      "count": 12
+    },
+    {
+      "label": "expert",
+      "width": 30,
+      "height": 16,
+      "mines": 99,
+      "seedPrefix": "holdout-expert",
+      "start": 101,
+      "count": 12
+    }
+  ]
+}
