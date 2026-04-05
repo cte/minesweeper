@@ -113,6 +113,9 @@ export interface ResearchProjectInput {
     rules: string[];
     notes?: string[];
   };
+  dashboard?: {
+    distDir?: string | null;
+  };
   hooks: ResearchHooks;
   formatPrompt?: ((context: PromptContext, project: ResearchProject) => string) | null;
   compare?: ((candidate: ScoreSnapshot, reference: ResultRecord, project: ResearchProject) => { keep: boolean; reason: string }) | null;
@@ -138,7 +141,28 @@ export interface ResearchProject {
     rules: string[];
     notes: string[];
   };
+  dashboard: {
+    distDir: string | null;
+  };
   hooks: ResearchHooks;
   formatPrompt: ((context: PromptContext, project: ResearchProject) => string) | null;
   compare: ((candidate: ScoreSnapshot, reference: ResultRecord, project: ResearchProject) => { keep: boolean; reason: string }) | null;
+}
+
+export interface DashboardProjectInfo {
+  name: string;
+  projectRoot: string;
+  editablePaths: string[];
+  primaryLabel: string;
+  secondaryLabel: string | null;
+}
+
+export interface DashboardPayload {
+  project: DashboardProjectInfo;
+  state: ResearchState;
+  results: ResultRecord[];
+  best: ResultRecord | null;
+  latest: ResultRecord | null;
+  events: ResearchEvent[];
+  transcriptTail: string;
 }

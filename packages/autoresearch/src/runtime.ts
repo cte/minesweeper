@@ -170,6 +170,9 @@ export function defineResearchProject(input: ResearchProjectInput): ResearchProj
       rules: input.prompt.rules,
       notes: input.prompt.notes ?? [],
     },
+    dashboard: {
+      distDir: input.dashboard?.distDir ?? null,
+    },
     hooks: input.hooks,
     formatPrompt: input.formatPrompt ?? null,
     compare: input.compare ?? null,

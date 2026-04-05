@@ -13,14 +13,15 @@
     "research:loop": "tsx src/research-loop.ts",
     "research:codex-edit": "tsx src/research-codex.ts",
     "research:loop:codex": "tsx src/research-loop-codex.ts",
-    "research:dashboard": "tsx src/research-dashboard.ts",
-    "check": "pnpm --filter @autoresearch/runtime check && tsc --noEmit"
+    "research:dashboard": "pnpm dashboard:build && tsx src/research-dashboard.ts",
+    "research:dashboard:api": "tsx src/research-dashboard.ts -- --api-only",
+    "dashboard:dev": "pnpm --filter @autoresearch/dashboard run dev",
+    "dashboard:build": "pnpm --filter @autoresearch/dashboard run build",
+    "dashboard:check": "pnpm --filter @autoresearch/dashboard run check",
+    "check": "pnpm --filter @autoresearch/runtime check && pnpm dashboard:check && tsc --noEmit"
   },
   "dependencies": {
-    "@autoresearch/runtime": "workspace:*",
-    "react": "^19.2.4",
-    "react-dom": "^19.2.4",
-    "use-stick-to-bottom": "^1.1.3"
+    "@autoresearch/runtime": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",

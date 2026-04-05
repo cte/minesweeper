@@ -30,6 +30,9 @@ export const minesweeperResearch = defineResearchProject({
       `Holdout benchmark: ${path.join(projectRoot, "bench", "holdout.json")}`,
     ],
   },
+  dashboard: {
+    distDir: path.join(projectRoot, "packages", "dashboard", "dist"),
+  },
   hooks: createJsonCommandHooks({
     evalCommand: ["pnpm", "score", "--", "--json"],
     holdoutCommand: ["pnpm", "score:holdout", "--", "--json"],

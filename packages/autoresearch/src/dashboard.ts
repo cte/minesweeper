@@ -1,22 +1,25 @@
-import http from "node:http";
-import { URL } from "node:url";
+import fs from "node:fs";
+import path from "node:path";
 
-import { readResearchEvents } from "./events.js";
-import { getAcceptedResultRecords, readResultRecords } from "./store.js";
-import { readResearchState } from "./state.js";
-import type { ResearchPaths, ResearchProject } from "./types.js";
+import { serve } from "@hono/node-server";
+import { trpcServer } from "@hono/trpc-server";
+import { Hono } from "hono";
+
+import { createDashboardRouter, readDashboardPayload } from "./dashboard-router.js";
+import type { ResearchProject } from "./types.js";
 import { resolveResearchPaths } from "./runtime.js";
-import { tailText } from "./utils.js";
 
 interface DashboardOptions {
   host: string;
   port: number;
+  apiOnly: boolean;
 }
 
 function parseArgs(argv: string[]): DashboardOptions {
   const options: DashboardOptions = {
     host: "127.0.0.1",
     port: 4312,
+    apiOnly: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -30,8 +33,10 @@ function parseArgs(argv: string[]): DashboardOptions {
     } else if (arg === "--port" && next) {
       options.port = Number(next);
       i += 1;
+    } else if (arg === "--api-only") {
+      options.apiOnly = true;
     } else if (arg === "--help" || arg === "-h") {
-      console.error("Usage: research:dashboard -- [--host 127.0.0.1] [--port 4312]");
+      console.error("Usage: research:dashboard -- [--host 127.0.0.1] [--port 4312] [--api-only]");
       process.exit(0);
     } else {
       throw new Error(`Unknown argument: ${arg}`);
@@ -43,25 +48,63 @@ function parseArgs(argv: string[]): DashboardOptions {
   return options;
 }
 
-function readDashboardPayload(project: ResearchProject, paths: ResearchPaths) {
-  const state = readResearchState(project, paths);
-  const results = readResultRecords(paths);
-  const accepted = getAcceptedResultRecords(results);
-  return {
-    project: {
-      name: project.projectName,
-      projectRoot: project.projectRoot,
-      editablePaths: project.editablePaths,
-      primaryLabel: project.metrics.primaryLabel,
-      secondaryLabel: project.metrics.secondaryLabel,
+function contentTypeFor(filePath: string): string {
+  const extension = path.extname(filePath).toLowerCase();
+  switch (extension) {
+    case ".css":
+      return "text/css; charset=utf-8";
+    case ".html":
+      return "text/html; charset=utf-8";
+    case ".ico":
+      return "image/x-icon";
+    case ".js":
+      return "text/javascript; charset=utf-8";
+    case ".json":
+      return "application/json; charset=utf-8";
+    case ".png":
+      return "image/png";
+    case ".svg":
+      return "image/svg+xml";
+    case ".txt":
+      return "text/plain; charset=utf-8";
+    case ".webp":
+      return "image/webp";
+    default:
+      return "application/octet-stream";
+  }
+}
+
+function resolveStaticAsset(distDir: string, pathname: string): string | null {
+  const decodedPath = decodeURIComponent(pathname);
+  const relativePath = decodedPath.replace(/^\/+/, "");
+  const candidate = path.resolve(distDir, relativePath);
+  const normalizedDistDir = path.resolve(distDir);
+  if (candidate !== normalizedDistDir && !candidate.startsWith(`${normalizedDistDir}${path.sep}`)) {
+    return null;
+  }
+  if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+    return candidate;
+  }
+  if (path.extname(relativePath).length > 0) {
+    return null;
+  }
+  const indexPath = path.join(distDir, "index.html");
+  if (fs.existsSync(indexPath) && fs.statSync(indexPath).isFile()) {
+    return indexPath;
+  }
+  return null;
+}
+
+function serveStaticDashboard(requestPath: string, distDir: string): Response | null {
+  const assetPath = resolveStaticAsset(distDir, requestPath);
+  if (!assetPath) {
+    return null;
+  }
+  return new Response(fs.readFileSync(assetPath), {
+    headers: {
+      "content-type": contentTypeFor(assetPath),
     },
-    state,
-    results,
-    best: accepted.at(-1) ?? null,
-    latest: results.at(-1) ?? null,
-    events: readResearchEvents(paths).slice(-100),
-    transcriptTail: tailText(paths.currentTranscriptPath, 50_000),
-  };
+  });
 }
 
 function htmlPage(): string {
@@ -382,24 +425,41 @@ function htmlPage(): string {
 export async function runResearchDashboardCli(project: ResearchProject, argv: string[]): Promise<void> {
   const options = parseArgs(argv);
   const paths = resolveResearchPaths(project);
-  const server = http.createServer((request, response) => {
-    const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
-    if (requestUrl.pathname === "/api/state") {
-      const payload = readDashboardPayload(project, paths);
-      response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-      response.end(JSON.stringify(payload));
-      return;
+  const distDir = project.dashboard.distDir;
+  const app = new Hono();
+  const router = createDashboardRouter(project);
+
+  app.use(
+    "/trpc/*",
+    trpcServer({
+      router,
+    }),
+  );
+
+  app.get("/api/state", (c) => c.json(readDashboardPayload(project, paths)));
+
+  app.get("*", (c) => {
+    if (!options.apiOnly && distDir) {
+      const asset = serveStaticDashboard(c.req.path, distDir);
+      if (asset) {
+        return asset;
+      }
     }
-    if (requestUrl.pathname === "/") {
-      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      response.end(htmlPage());
-      return;
+    if (c.req.path === "/") {
+      return c.html(htmlPage());
     }
-    response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
-    response.end("not found");
+    return c.text("not found", 404);
   });
+
   await new Promise<void>((resolve) => {
-    server.listen(options.port, options.host, () => resolve());
+    serve(
+      {
+        fetch: app.fetch,
+        hostname: options.host,
+        port: options.port,
+      },
+      () => resolve(),
+    );
   });
   console.log(`dashboard: http://${options.host}:${options.port}`);
 }
