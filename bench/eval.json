@@ -1,6 +1,6 @@
 {
-  "name": "eval-v1",
-  "description": "Primary optimization benchmark with fixed seeded beginner, intermediate, and expert boards.",
+  "name": "eval-v2",
+  "description": "Primary optimization benchmark with a broader, more expert-heavy mix of fixed seeded boards.",
   "suites": [
     {
       "label": "beginner",
@@ -9,7 +9,7 @@
       "mines": 10,
       "seedPrefix": "eval-beginner",
       "start": 1,
-      "count": 24
+      "count": 12
     },
     {
       "label": "intermediate",
@@ -18,7 +18,16 @@
       "mines": 40,
       "seedPrefix": "eval-intermediate",
       "start": 1,
-      "count": 24
+      "count": 20
+    },
+    {
+      "label": "intermediate-dense",
+      "width": 16,
+      "height": 16,
+      "mines": 56,
+      "seedPrefix": "eval-intermediate-dense",
+      "start": 1,
+      "count": 16
     },
     {
       "label": "expert",
@@ -27,7 +36,25 @@
       "mines": 99,
       "seedPrefix": "eval-expert",
       "start": 1,
-      "count": 24
+      "count": 36
+    },
+    {
+      "label": "expert-dense",
+      "width": 30,
+      "height": 16,
+      "mines": 120,
+      "seedPrefix": "eval-expert-dense",
+      "start": 1,
+      "count": 20
+    },
+    {
+      "label": "expert-tall",
+      "width": 20,
+      "height": 24,
+      "mines": 99,
+      "seedPrefix": "eval-expert-tall",
+      "start": 1,
+      "count": 16
     }
   ]
 }

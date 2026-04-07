@@ -1,6 +1,6 @@
 {
-  "name": "holdout-v1",
-  "description": "Secondary benchmark for checking whether changes generalize beyond the main eval set.",
+  "name": "holdout-v2",
+  "description": "Secondary benchmark for checking whether improvements generalize across a broader expert-heavy mix.",
   "suites": [
     {
       "label": "beginner",
@@ -8,8 +8,8 @@
       "height": 9,
       "mines": 10,
       "seedPrefix": "holdout-beginner",
-      "start": 101,
-      "count": 12
+      "start": 201,
+      "count": 6
     },
     {
       "label": "intermediate",
@@ -17,8 +17,17 @@
       "height": 16,
       "mines": 40,
       "seedPrefix": "holdout-intermediate",
-      "start": 101,
-      "count": 12
+      "start": 201,
+      "count": 10
+    },
+    {
+      "label": "intermediate-dense",
+      "width": 16,
+      "height": 16,
+      "mines": 56,
+      "seedPrefix": "holdout-intermediate-dense",
+      "start": 201,
+      "count": 8
     },
     {
       "label": "expert",
@@ -26,8 +35,26 @@
       "height": 16,
       "mines": 99,
       "seedPrefix": "holdout-expert",
-      "start": 101,
-      "count": 12
+      "start": 201,
+      "count": 18
+    },
+    {
+      "label": "expert-dense",
+      "width": 30,
+      "height": 16,
+      "mines": 120,
+      "seedPrefix": "holdout-expert-dense",
+      "start": 201,
+      "count": 10
+    },
+    {
+      "label": "expert-tall",
+      "width": 20,
+      "height": 24,
+      "mines": 99,
+      "seedPrefix": "holdout-expert-tall",
+      "start": 201,
+      "count": 8
     }
   ]
 }
