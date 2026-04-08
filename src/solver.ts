@@ -96,62 +96,65 @@ function collectClueConstraints(view: GameView): ClueConstraint[] {
   return constraints;
 }
 
-function isStrictSubset(subset: Set<string>, superset: Set<string>): boolean {
-  if (subset.size >= superset.size) {
-    return false;
-  }
-
-  for (const key of subset) {
-    if (!superset.has(key)) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-function findSubsetInferenceMove(view: GameView): Move | null {
+function findPairwiseInferenceMove(view: GameView): Move | null {
   const constraints = collectClueConstraints(view);
 
-  for (const subsetConstraint of constraints) {
-    for (const supersetConstraint of constraints) {
-      if (subsetConstraint === supersetConstraint) {
-        continue;
-      }
-
-      if (!isStrictSubset(subsetConstraint.hiddenKeys, supersetConstraint.hiddenKeys)) {
-        continue;
-      }
-
-      const difference = supersetConstraint.hidden.filter(
-        (cell) => !subsetConstraint.hiddenKeys.has(cellKey(cell)),
+  for (let leftIndex = 0; leftIndex < constraints.length; leftIndex += 1) {
+    const leftConstraint = constraints[leftIndex]!;
+    for (let rightIndex = leftIndex + 1; rightIndex < constraints.length; rightIndex += 1) {
+      const rightConstraint = constraints[rightIndex]!;
+      const leftOnly = leftConstraint.hidden.filter(
+        (cell) => !rightConstraint.hiddenKeys.has(cellKey(cell)),
       );
-      const minesDelta = supersetConstraint.minesLeft - subsetConstraint.minesLeft;
-
-      if (difference.length === 0) {
+      const rightOnly = rightConstraint.hidden.filter(
+        (cell) => !leftConstraint.hiddenKeys.has(cellKey(cell)),
+      );
+      if (leftOnly.length === 0 && rightOnly.length === 0) {
         continue;
       }
 
-      if (minesDelta === 0) {
-        const target = firstHiddenNeighbor(difference);
+      const minesDelta = leftConstraint.minesLeft - rightConstraint.minesLeft;
+
+      if (minesDelta === leftOnly.length) {
+        const target = firstHiddenNeighbor(rightOnly);
         if (target) {
           return {
             kind: "reveal",
             x: target.x,
             y: target.y,
-            reason: `subset-safe from clues ${subsetConstraint.cell.x},${subsetConstraint.cell.y} and ${supersetConstraint.cell.x},${supersetConstraint.cell.y}`,
+            reason: `pairwise-safe from clues ${leftConstraint.cell.x},${leftConstraint.cell.y} and ${rightConstraint.cell.x},${rightConstraint.cell.y}`,
+          };
+        }
+
+        const mine = firstHiddenNeighbor(leftOnly);
+        if (mine) {
+          return {
+            kind: "flag",
+            x: mine.x,
+            y: mine.y,
+            reason: `pairwise-mine from clues ${leftConstraint.cell.x},${leftConstraint.cell.y} and ${rightConstraint.cell.x},${rightConstraint.cell.y}`,
           };
         }
       }
 
-      if (minesDelta === difference.length) {
-        const target = firstHiddenNeighbor(difference);
+      if (-minesDelta === rightOnly.length) {
+        const target = firstHiddenNeighbor(leftOnly);
         if (target) {
           return {
-            kind: "flag",
+            kind: "reveal",
             x: target.x,
             y: target.y,
-            reason: `subset-mine from clues ${subsetConstraint.cell.x},${subsetConstraint.cell.y} and ${supersetConstraint.cell.x},${supersetConstraint.cell.y}`,
+            reason: `pairwise-safe from clues ${leftConstraint.cell.x},${leftConstraint.cell.y} and ${rightConstraint.cell.x},${rightConstraint.cell.y}`,
+          };
+        }
+
+        const mine = firstHiddenNeighbor(rightOnly);
+        if (mine) {
+          return {
+            kind: "flag",
+            x: mine.x,
+            y: mine.y,
+            reason: `pairwise-mine from clues ${leftConstraint.cell.x},${leftConstraint.cell.y} and ${rightConstraint.cell.x},${rightConstraint.cell.y}`,
           };
         }
       }
@@ -210,9 +213,9 @@ export class BaselineSolver implements Solver {
       }
     }
 
-    const subsetMove = findSubsetInferenceMove(view);
-    if (subsetMove) {
-      return subsetMove;
+    const pairwiseMove = findPairwiseInferenceMove(view);
+    if (pairwiseMove) {
+      return pairwiseMove;
     }
 
     return firstHiddenCell(view);
