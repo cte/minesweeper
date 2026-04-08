@@ -36,6 +36,7 @@ interface GlobalExactRiskAnalysis {
 
 const MAX_EXACT_COMPONENT_CELLS = 18;
 const MAX_EXACT_SEARCH_NODES = 200_000;
+const MAX_LOCAL_EXACT_ROOTS = 12;
 const RISK_EPSILON = 1e-9;
 
 function combinationCount(total: number, selected: number): number {
@@ -412,6 +413,209 @@ function analyzeComponentExactly(component: FrontierComponent): ExactComponentAn
   };
 }
 
+function buildLocalExactComponent(
+  component: FrontierComponent,
+  rootConstraintIndex: number,
+): FrontierComponent | null {
+  const rootConstraint = component.constraints[rootConstraintIndex]!;
+  if (rootConstraint.hidden.length > MAX_EXACT_COMPONENT_CELLS) {
+    return null;
+  }
+
+  const includedConstraintIndexes = new Set<number>([rootConstraintIndex]);
+  const includedCellsByKey = new Map<string, CellView>();
+
+  for (const cell of rootConstraint.hidden) {
+    includedCellsByKey.set(cellKey(cell), cell);
+  }
+
+  while (true) {
+    let bestConstraintIndex: number | null = null;
+    let bestOverlap = -1;
+    let bestAddedCells = Number.POSITIVE_INFINITY;
+    let bestTightness = Number.POSITIVE_INFINITY;
+    let bestHiddenCount = Number.POSITIVE_INFINITY;
+    let bestY = Number.POSITIVE_INFINITY;
+    let bestX = Number.POSITIVE_INFINITY;
+
+    for (let constraintIndex = 0; constraintIndex < component.constraints.length; constraintIndex += 1) {
+      if (includedConstraintIndexes.has(constraintIndex)) {
+        continue;
+      }
+
+      const constraint = component.constraints[constraintIndex]!;
+      let overlap = 0;
+      let addedCells = 0;
+
+      for (const cell of constraint.hidden) {
+        if (includedCellsByKey.has(cellKey(cell))) {
+          overlap += 1;
+        } else {
+          addedCells += 1;
+        }
+      }
+
+      if (overlap === 0 || includedCellsByKey.size + addedCells > MAX_EXACT_COMPONENT_CELLS) {
+        continue;
+      }
+
+      const tightness = Math.min(constraint.minesLeft, constraint.hidden.length - constraint.minesLeft);
+      const shouldReplace =
+        overlap > bestOverlap ||
+        (overlap === bestOverlap && addedCells < bestAddedCells) ||
+        (overlap === bestOverlap &&
+          addedCells === bestAddedCells &&
+          tightness < bestTightness) ||
+        (overlap === bestOverlap &&
+          addedCells === bestAddedCells &&
+          tightness === bestTightness &&
+          constraint.hidden.length < bestHiddenCount) ||
+        (overlap === bestOverlap &&
+          addedCells === bestAddedCells &&
+          tightness === bestTightness &&
+          constraint.hidden.length === bestHiddenCount &&
+          constraint.cell.y < bestY) ||
+        (overlap === bestOverlap &&
+          addedCells === bestAddedCells &&
+          tightness === bestTightness &&
+          constraint.hidden.length === bestHiddenCount &&
+          constraint.cell.y === bestY &&
+          constraint.cell.x < bestX);
+
+      if (!shouldReplace) {
+        continue;
+      }
+
+      bestConstraintIndex = constraintIndex;
+      bestOverlap = overlap;
+      bestAddedCells = addedCells;
+      bestTightness = tightness;
+      bestHiddenCount = constraint.hidden.length;
+      bestY = constraint.cell.y;
+      bestX = constraint.cell.x;
+    }
+
+    if (bestConstraintIndex === null) {
+      break;
+    }
+
+    includedConstraintIndexes.add(bestConstraintIndex);
+    for (const cell of component.constraints[bestConstraintIndex]!.hidden) {
+      includedCellsByKey.set(cellKey(cell), cell);
+    }
+  }
+
+  if (includedConstraintIndexes.size < 2) {
+    return null;
+  }
+
+  const constraints = [...includedConstraintIndexes]
+    .sort((left, right) => left - right)
+    .map((constraintIndex) => component.constraints[constraintIndex]!);
+  const cells = [...includedCellsByKey.values()].sort((left, right) => {
+    if (left.y !== right.y) {
+      return left.y - right.y;
+    }
+
+    return left.x - right.x;
+  });
+
+  return {
+    cells,
+    constraints,
+  };
+}
+
+function findLocalExactInferenceMoves(
+  view: GameView,
+  components: FrontierComponent[],
+): { forcedSafe: MoveCandidate | null; forcedMine: MoveCandidate | null } {
+  let forcedSafe: MoveCandidate | null = null;
+  let forcedMine: MoveCandidate | null = null;
+
+  for (const component of components) {
+    const cellMembershipCounts = new Map<string, number>();
+    for (const constraint of component.constraints) {
+      for (const cell of constraint.hidden) {
+        const key = cellKey(cell);
+        cellMembershipCounts.set(key, (cellMembershipCounts.get(key) ?? 0) + 1);
+      }
+    }
+
+    const rootConstraintIndexes = component.constraints
+      .map((constraint, index) => {
+        const overlapPotential = constraint.hidden.reduce(
+          (sum, cell) => sum + (cellMembershipCounts.get(cellKey(cell)) ?? 1) - 1,
+          0,
+        );
+        const tightness = Math.min(constraint.minesLeft, constraint.hidden.length - constraint.minesLeft);
+
+        return {
+          index,
+          overlapPotential,
+          tightness,
+          hiddenCount: constraint.hidden.length,
+          x: constraint.cell.x,
+          y: constraint.cell.y,
+        };
+      })
+      .sort((left, right) => {
+        if (left.overlapPotential !== right.overlapPotential) {
+          return right.overlapPotential - left.overlapPotential;
+        }
+
+        if (left.tightness !== right.tightness) {
+          return left.tightness - right.tightness;
+        }
+
+        if (left.hiddenCount !== right.hiddenCount) {
+          return left.hiddenCount - right.hiddenCount;
+        }
+
+        if (left.y !== right.y) {
+          return left.y - right.y;
+        }
+
+        return left.x - right.x;
+      })
+      .slice(0, MAX_LOCAL_EXACT_ROOTS);
+
+    for (const root of rootConstraintIndexes) {
+      const localComponent = buildLocalExactComponent(component, root.index);
+      if (!localComponent) {
+        continue;
+      }
+
+      const analysis = analyzeComponentExactly(localComponent);
+      if (!analysis) {
+        continue;
+      }
+
+      for (let index = 0; index < analysis.cells.length; index += 1) {
+        const cell = analysis.cells[index]!;
+        const mineCount = analysis.mineCounts[index]!;
+
+        if (mineCount === 0) {
+          forcedSafe = preferMoveCandidate(view, forcedSafe, {
+            cell,
+            reason: `local-exact-safe from ${analysis.solutionCount} neighborhood solutions`,
+          });
+        } else if (mineCount === analysis.solutionCount) {
+          forcedMine = preferMoveCandidate(view, forcedMine, {
+            cell,
+            reason: `local-exact-mine from ${analysis.solutionCount} neighborhood solutions`,
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    forcedSafe,
+    forcedMine,
+  };
+}
+
 function combineExactAnalysesWithMineBudget(
   analyses: ExactComponentAnalysis[],
   remainingMines: number,
@@ -612,12 +816,14 @@ function chooseRiskBasedMove(view: GameView): Move | null {
   let forcedMine: MoveCandidate | null = null;
   const components = buildFrontierComponents(constraints);
   const exactAnalyses: ExactComponentAnalysis[] = [];
+  const inexactComponents: FrontierComponent[] = [];
   let allComponentsExact = true;
 
   for (const component of components) {
     const analysis = analyzeComponentExactly(component);
     if (!analysis) {
       allComponentsExact = false;
+      inexactComponents.push(component);
       continue;
     }
 
@@ -702,6 +908,12 @@ function chooseRiskBasedMove(view: GameView): Move | null {
         }
       }
     }
+  }
+
+  if (!forcedSafe && !forcedMine && inexactComponents.length > 0) {
+    const localExact = findLocalExactInferenceMoves(view, inexactComponents);
+    forcedSafe = localExact.forcedSafe;
+    forcedMine = localExact.forcedMine;
   }
 
   if (forcedSafe) {
