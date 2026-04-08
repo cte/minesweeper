@@ -29,14 +29,23 @@ interface GuessCandidate extends MoveCandidate {
   risk: number;
 }
 
-interface GlobalExactRiskAnalysis {
+interface ComponentMineTotalAnalysis {
+  cells: CellView[];
+  exactAnalysis: ExactComponentAnalysis | null;
+  solutionCountsByTotal: number[];
+}
+
+interface GlobalMineBudgetAnalysis {
   frontierRiskByKey: Map<string, number>;
   offFrontierRisk: number | null;
+  posteriorWeightsByComponent: number[][];
 }
 
 const MAX_EXACT_COMPONENT_CELLS = 18;
 const MAX_EXACT_COMPONENT_GROUPS = 18;
 const MAX_EXACT_SEARCH_NODES = 200_000;
+const MAX_COMPONENT_TOTAL_GROUPS = 24;
+const MAX_COMPONENT_TOTAL_SEARCH_NODES = 400_000;
 const MAX_LOCAL_EXACT_ROOTS = 12;
 const RISK_EPSILON = 1e-9;
 
@@ -661,75 +670,252 @@ function findLocalExactInferenceMoves(
   };
 }
 
-function combineExactAnalysesWithMineBudget(
-  analyses: ExactComponentAnalysis[],
+function analyzeComponentMineTotals(component: FrontierComponent): number[] | null {
+  if (component.cells.length === 0) {
+    return null;
+  }
+
+  const constraintMemberships = new Map<string, number[]>();
+  for (let constraintIndex = 0; constraintIndex < component.constraints.length; constraintIndex += 1) {
+    const constraint = component.constraints[constraintIndex]!;
+    for (const cell of constraint.hidden) {
+      const key = cellKey(cell);
+      const memberships = constraintMemberships.get(key);
+      if (memberships) {
+        memberships.push(constraintIndex);
+      } else {
+        constraintMemberships.set(key, [constraintIndex]);
+      }
+    }
+  }
+
+  const groupedCells = new Map<
+    string,
+    {
+      cells: CellView[];
+      constraintIndexes: number[];
+    }
+  >();
+
+  for (const cell of component.cells) {
+    const key = cellKey(cell);
+    const memberships = [...(constraintMemberships.get(key) ?? [])];
+    const signature = memberships.join(",");
+    const group = groupedCells.get(signature);
+
+    if (group) {
+      group.cells.push(cell);
+    } else {
+      groupedCells.set(signature, {
+        cells: [cell],
+        constraintIndexes: memberships,
+      });
+    }
+  }
+
+  if (groupedCells.size > MAX_COMPONENT_TOTAL_GROUPS) {
+    return null;
+  }
+
+  const orderedGroups = [...groupedCells.values()]
+    .map((group) => ({
+      cells: [...group.cells].sort((left, right) => {
+        if (left.y !== right.y) {
+          return left.y - right.y;
+        }
+
+        return left.x - right.x;
+      }),
+      constraintIndexes: group.constraintIndexes,
+    }))
+    .sort((left, right) => {
+      if (left.constraintIndexes.length !== right.constraintIndexes.length) {
+        return right.constraintIndexes.length - left.constraintIndexes.length;
+      }
+
+      if (left.cells.length !== right.cells.length) {
+        return left.cells.length - right.cells.length;
+      }
+
+      const leftAnchor = left.cells[0]!;
+      const rightAnchor = right.cells[0]!;
+
+      if (leftAnchor.y !== rightAnchor.y) {
+        return leftAnchor.y - rightAnchor.y;
+      }
+
+      return leftAnchor.x - rightAnchor.x;
+    });
+
+  const totalCells = orderedGroups.reduce((sum, group) => sum + group.cells.length, 0);
+  const constraintRemainingCells = component.constraints.map((constraint) => constraint.hidden.length);
+  const constraintRemainingMines = component.constraints.map((constraint) => constraint.minesLeft);
+  const solutionCountsByTotal = Array(totalCells + 1).fill(0);
+  let solutionCount = 0;
+  let searchNodes = 0;
+  let aborted = false;
+
+  function search(groupIndex: number, assignedMines: number, assignmentWeight: number): void {
+    if (aborted) {
+      return;
+    }
+
+    if (groupIndex === orderedGroups.length) {
+      for (const remainingMines of constraintRemainingMines) {
+        if (remainingMines !== 0) {
+          return;
+        }
+      }
+
+      solutionCount += assignmentWeight;
+      solutionCountsByTotal[assignedMines]! += assignmentWeight;
+      return;
+    }
+
+    const group = orderedGroups[groupIndex]!;
+    const relatedConstraints = group.constraintIndexes;
+    let minMines = 0;
+    let maxMines = group.cells.length;
+
+    for (const constraintIndex of relatedConstraints) {
+      const remainingCells = constraintRemainingCells[constraintIndex]!;
+      const remainingMines = constraintRemainingMines[constraintIndex]!;
+      minMines = Math.max(minMines, remainingMines - (remainingCells - group.cells.length));
+      maxMines = Math.min(maxMines, remainingMines);
+    }
+
+    if (minMines > maxMines) {
+      return;
+    }
+
+    for (let minesInGroup = minMines; minesInGroup <= maxMines; minesInGroup += 1) {
+      searchNodes += 1;
+      if (searchNodes > MAX_COMPONENT_TOTAL_SEARCH_NODES) {
+        aborted = true;
+        return;
+      }
+
+      for (const constraintIndex of relatedConstraints) {
+        constraintRemainingCells[constraintIndex]! -= group.cells.length;
+        constraintRemainingMines[constraintIndex]! -= minesInGroup;
+      }
+
+      search(
+        groupIndex + 1,
+        assignedMines + minesInGroup,
+        assignmentWeight * combinationCount(group.cells.length, minesInGroup),
+      );
+
+      for (const constraintIndex of relatedConstraints) {
+        constraintRemainingCells[constraintIndex]! += group.cells.length;
+        constraintRemainingMines[constraintIndex]! += minesInGroup;
+      }
+    }
+  }
+
+  search(0, 0, 1);
+
+  if (aborted || solutionCount === 0) {
+    return null;
+  }
+
+  return solutionCountsByTotal;
+}
+
+function buildFallbackMineTotalWeights(component: FrontierComponent): number[] {
+  const totalCells = component.cells.length;
+  let minTotalMines = 0;
+  let maxTotalMines = totalCells;
+
+  for (const constraint of component.constraints) {
+    minTotalMines = Math.max(minTotalMines, constraint.minesLeft);
+    maxTotalMines = Math.min(
+      maxTotalMines,
+      totalCells - (constraint.hidden.length - constraint.minesLeft),
+    );
+  }
+
+  const weights = Array(totalCells + 1).fill(0);
+  for (let mines = minTotalMines; mines <= maxTotalMines; mines += 1) {
+    weights[mines] = combinationCount(totalCells, mines);
+  }
+
+  if (weights.some((weight) => weight > 0)) {
+    return weights;
+  }
+
+  return Array.from({ length: totalCells + 1 }, (_, mines) => combinationCount(totalCells, mines));
+}
+
+function combineComponentMineTotalsWithBudget(
+  components: ComponentMineTotalAnalysis[],
   remainingMines: number,
   offFrontierCount: number,
-): GlobalExactRiskAnalysis | null {
-  if (analyses.length === 0) {
+): GlobalMineBudgetAnalysis | null {
+  if (components.length === 0) {
     return null;
   }
 
   const totalCells =
-    analyses.reduce((sum, analysis) => sum + analysis.cells.length, 0) + offFrontierCount;
+    components.reduce((sum, component) => sum + component.cells.length, 0) + offFrontierCount;
   const boundedRemainingMines = Math.max(0, Math.min(remainingMines, totalCells));
   const offFrontierWaysByMines = Array.from(
     { length: boundedRemainingMines + 1 },
     (_, mines) => combinationCount(offFrontierCount, mines),
   );
 
-  const prefixWays = Array.from({ length: analyses.length + 1 }, () =>
+  const prefixWays = Array.from({ length: components.length + 1 }, () =>
     Array(boundedRemainingMines + 1).fill(0),
   );
   prefixWays[0]![0] = 1;
 
-  for (let analysisIndex = 0; analysisIndex < analyses.length; analysisIndex += 1) {
-    const analysis = analyses[analysisIndex]!;
+  for (let componentIndex = 0; componentIndex < components.length; componentIndex += 1) {
+    const component = components[componentIndex]!;
     for (let usedMines = 0; usedMines <= boundedRemainingMines; usedMines += 1) {
-      const baseWays = prefixWays[analysisIndex]![usedMines]!;
+      const baseWays = prefixWays[componentIndex]![usedMines]!;
       if (baseWays === 0) {
         continue;
       }
 
       const maxComponentMines = Math.min(
-        analysis.solutionCountsByTotal.length - 1,
+        component.solutionCountsByTotal.length - 1,
         boundedRemainingMines - usedMines,
       );
       for (let componentMines = 0; componentMines <= maxComponentMines; componentMines += 1) {
-        const componentWays = analysis.solutionCountsByTotal[componentMines]!;
+        const componentWays = component.solutionCountsByTotal[componentMines]!;
         if (componentWays === 0) {
           continue;
         }
 
-        prefixWays[analysisIndex + 1]![usedMines + componentMines]! += baseWays * componentWays;
+        prefixWays[componentIndex + 1]![usedMines + componentMines]! += baseWays * componentWays;
       }
     }
   }
 
-  const suffixWays = Array.from({ length: analyses.length + 1 }, () =>
+  const suffixWays = Array.from({ length: components.length + 1 }, () =>
     Array(boundedRemainingMines + 1).fill(0),
   );
-  suffixWays[analyses.length]![0] = 1;
+  suffixWays[components.length]![0] = 1;
 
-  for (let analysisIndex = analyses.length - 1; analysisIndex >= 0; analysisIndex -= 1) {
-    const analysis = analyses[analysisIndex]!;
+  for (let componentIndex = components.length - 1; componentIndex >= 0; componentIndex -= 1) {
+    const component = components[componentIndex]!;
     for (let usedMines = 0; usedMines <= boundedRemainingMines; usedMines += 1) {
-      const baseWays = suffixWays[analysisIndex + 1]![usedMines]!;
+      const baseWays = suffixWays[componentIndex + 1]![usedMines]!;
       if (baseWays === 0) {
         continue;
       }
 
       const maxComponentMines = Math.min(
-        analysis.solutionCountsByTotal.length - 1,
+        component.solutionCountsByTotal.length - 1,
         boundedRemainingMines - usedMines,
       );
       for (let componentMines = 0; componentMines <= maxComponentMines; componentMines += 1) {
-        const componentWays = analysis.solutionCountsByTotal[componentMines]!;
+        const componentWays = component.solutionCountsByTotal[componentMines]!;
         if (componentWays === 0) {
           continue;
         }
 
-        suffixWays[analysisIndex]![usedMines + componentMines]! += baseWays * componentWays;
+        suffixWays[componentIndex]![usedMines + componentMines]! += baseWays * componentWays;
       }
     }
   }
@@ -738,7 +924,7 @@ function combineExactAnalysesWithMineBudget(
   let offFrontierMineWeight = 0;
 
   for (let frontierMines = 0; frontierMines <= boundedRemainingMines; frontierMines += 1) {
-    const frontierWays = prefixWays[analyses.length]![frontierMines]!;
+    const frontierWays = prefixWays[components.length]![frontierMines]!;
     const offFrontierMines = boundedRemainingMines - frontierMines;
     const offFrontierWays = offFrontierWaysByMines[offFrontierMines] ?? 0;
     if (frontierWays === 0 || offFrontierWays === 0) {
@@ -755,19 +941,22 @@ function combineExactAnalysesWithMineBudget(
   }
 
   const frontierRiskByKey = new Map<string, number>();
+  const posteriorWeightsByComponent = components.map((component) =>
+    Array(component.solutionCountsByTotal.length).fill(0),
+  );
 
-  for (let analysisIndex = 0; analysisIndex < analyses.length; analysisIndex += 1) {
-    const analysis = analyses[analysisIndex]!;
+  for (let componentIndex = 0; componentIndex < components.length; componentIndex += 1) {
+    const component = components[componentIndex]!;
     const otherWaysByTotal = Array(boundedRemainingMines + 1).fill(0);
 
     for (let leftMines = 0; leftMines <= boundedRemainingMines; leftMines += 1) {
-      const leftWays = prefixWays[analysisIndex]![leftMines]!;
+      const leftWays = prefixWays[componentIndex]![leftMines]!;
       if (leftWays === 0) {
         continue;
       }
 
       for (let rightMines = 0; leftMines + rightMines <= boundedRemainingMines; rightMines += 1) {
-        const rightWays = suffixWays[analysisIndex + 1]![rightMines]!;
+        const rightWays = suffixWays[componentIndex + 1]![rightMines]!;
         if (rightWays === 0) {
           continue;
         }
@@ -776,13 +965,13 @@ function combineExactAnalysesWithMineBudget(
       }
     }
 
-    const totalWeightByComponentMineTotal = Array(analysis.solutionCountsByTotal.length).fill(0);
+    const totalWeightByComponentMineTotal = Array(component.solutionCountsByTotal.length).fill(0);
     for (
       let componentMines = 0;
-      componentMines < analysis.solutionCountsByTotal.length;
+      componentMines < component.solutionCountsByTotal.length;
       componentMines += 1
     ) {
-      if (analysis.solutionCountsByTotal[componentMines] === 0) {
+      if (component.solutionCountsByTotal[componentMines] === 0) {
         continue;
       }
 
@@ -803,11 +992,17 @@ function combineExactAnalysesWithMineBudget(
       }
 
       totalWeightByComponentMineTotal[componentMines] = componentWeight;
+      posteriorWeightsByComponent[componentIndex]![componentMines] =
+        component.solutionCountsByTotal[componentMines]! * componentWeight;
     }
 
-    for (let cellIndex = 0; cellIndex < analysis.cells.length; cellIndex += 1) {
+    if (!component.exactAnalysis) {
+      continue;
+    }
+
+    for (let cellIndex = 0; cellIndex < component.exactAnalysis.cells.length; cellIndex += 1) {
       let mineWeight = 0;
-      const cellMineCountsByTotal = analysis.mineCountsByTotal[cellIndex]!;
+      const cellMineCountsByTotal = component.exactAnalysis.mineCountsByTotal[cellIndex]!;
 
       for (
         let componentMines = 0;
@@ -823,7 +1018,10 @@ function combineExactAnalysesWithMineBudget(
         mineWeight += cellMineCount * componentWeight;
       }
 
-      frontierRiskByKey.set(cellKey(analysis.cells[cellIndex]!), mineWeight / totalWeightedSolutions);
+      frontierRiskByKey.set(
+        cellKey(component.exactAnalysis.cells[cellIndex]!),
+        mineWeight / totalWeightedSolutions,
+      );
     }
   }
 
@@ -831,6 +1029,7 @@ function combineExactAnalysesWithMineBudget(
     frontierRiskByKey,
     offFrontierRisk:
       offFrontierCount > 0 ? offFrontierMineWeight / (totalWeightedSolutions * offFrontierCount) : null,
+    posteriorWeightsByComponent,
   };
 }
 
@@ -860,19 +1059,27 @@ function chooseRiskBasedMove(view: GameView): Move | null {
   let forcedSafe: MoveCandidate | null = null;
   let forcedMine: MoveCandidate | null = null;
   const components = buildFrontierComponents(constraints);
-  const exactAnalyses: ExactComponentAnalysis[] = [];
   const inexactComponents: FrontierComponent[] = [];
-  let allComponentsExact = true;
+  const mineTotalAnalyses: ComponentMineTotalAnalysis[] = [];
 
   for (const component of components) {
     const analysis = analyzeComponentExactly(component);
     if (!analysis) {
-      allComponentsExact = false;
       inexactComponents.push(component);
+      mineTotalAnalyses.push({
+        cells: component.cells,
+        exactAnalysis: null,
+        solutionCountsByTotal:
+          analyzeComponentMineTotals(component) ?? buildFallbackMineTotalWeights(component),
+      });
       continue;
     }
 
-    exactAnalyses.push(analysis);
+    mineTotalAnalyses.push({
+      cells: component.cells,
+      exactAnalysis: analysis,
+      solutionCountsByTotal: analysis.solutionCountsByTotal,
+    });
 
     for (let index = 0; index < analysis.cells.length; index += 1) {
       const cell = analysis.cells[index]!;
@@ -902,54 +1109,99 @@ function chooseRiskBasedMove(view: GameView): Move | null {
 
   let backgroundRisk = Math.min(1, Math.max(0, view.remainingMinesEstimate / unresolved.length));
 
-  if (allComponentsExact && components.length > 0) {
-    const globalExact = combineExactAnalysesWithMineBudget(
-      exactAnalyses,
-      view.remainingMinesEstimate,
-      unresolved.length - frontierCellsByKey.size,
-    );
+  const globalBudget = combineComponentMineTotalsWithBudget(
+    mineTotalAnalyses,
+    view.remainingMinesEstimate,
+    unresolved.length - frontierCellsByKey.size,
+  );
 
-    if (globalExact) {
-      backgroundRisk = globalExact.offFrontierRisk ?? backgroundRisk;
+  if (globalBudget) {
+    backgroundRisk = globalBudget.offFrontierRisk ?? backgroundRisk;
 
-      for (const [key, risk] of globalExact.frontierRiskByKey) {
-        frontierRiskByKey.set(key, risk);
+    for (const [key, risk] of globalBudget.frontierRiskByKey) {
+      frontierRiskByKey.set(key, risk);
 
-        const cell = frontierCellsByKey.get(key);
-        if (!cell) {
+      const cell = frontierCellsByKey.get(key);
+      if (!cell) {
+        continue;
+      }
+
+      if (risk <= RISK_EPSILON) {
+        forcedSafe = preferMoveCandidate(view, forcedSafe, {
+          cell,
+          reason: "global-safe from frontier mine budgeting",
+        });
+      } else if (risk >= 1 - RISK_EPSILON) {
+        forcedMine = preferMoveCandidate(view, forcedMine, {
+          cell,
+          reason: "global-mine from frontier mine budgeting",
+        });
+      }
+    }
+
+    for (let componentIndex = 0; componentIndex < mineTotalAnalyses.length; componentIndex += 1) {
+      const componentAnalysis = mineTotalAnalyses[componentIndex]!;
+      if (componentAnalysis.exactAnalysis) {
+        continue;
+      }
+
+      const posteriorWeights = globalBudget.posteriorWeightsByComponent[componentIndex]!;
+      let hasZeroTotal = false;
+      let hasFullTotal = false;
+      let hasIntermediateTotal = false;
+
+      for (let mines = 0; mines < posteriorWeights.length; mines += 1) {
+        if (posteriorWeights[mines] === 0) {
           continue;
         }
 
-        if (risk <= RISK_EPSILON) {
+        if (mines === 0) {
+          hasZeroTotal = true;
+          continue;
+        }
+
+        if (mines === componentAnalysis.cells.length) {
+          hasFullTotal = true;
+          continue;
+        }
+
+        hasIntermediateTotal = true;
+        break;
+      }
+
+      if (!hasIntermediateTotal && hasZeroTotal && !hasFullTotal) {
+        for (const cell of componentAnalysis.cells) {
           forcedSafe = preferMoveCandidate(view, forcedSafe, {
             cell,
-            reason: "global-safe from exact frontier mine budgeting",
+            reason: "global-safe whole frontier component from mine budgeting",
           });
-        } else if (risk >= 1 - RISK_EPSILON) {
+        }
+      } else if (!hasIntermediateTotal && hasFullTotal && !hasZeroTotal) {
+        for (const cell of componentAnalysis.cells) {
           forcedMine = preferMoveCandidate(view, forcedMine, {
             cell,
-            reason: "global-mine from exact frontier mine budgeting",
+            reason: "global-mine whole frontier component from mine budgeting",
           });
         }
       }
+    }
 
-      if (globalExact.offFrontierRisk !== null) {
-        for (const cell of unresolved) {
-          if (frontierRiskByKey.has(cellKey(cell))) {
-            continue;
-          }
+    if (globalBudget.offFrontierRisk !== null) {
+      for (const cell of unresolved) {
+        if (frontierRiskByKey.has(cellKey(cell))) {
+          continue;
+        }
 
-          if (globalExact.offFrontierRisk <= RISK_EPSILON) {
-            forcedSafe = preferMoveCandidate(view, forcedSafe, {
-              cell,
-              reason: "global-safe off frontier from exact mine budgeting",
-            });
-          } else if (globalExact.offFrontierRisk >= 1 - RISK_EPSILON) {
-            forcedMine = preferMoveCandidate(view, forcedMine, {
-              cell,
-              reason: "global-mine off frontier from exact mine budgeting",
-            });
-          }
+        if (globalBudget.offFrontierRisk <= RISK_EPSILON) {
+          forcedSafe = preferMoveCandidate(view, forcedSafe, {
+            cell,
+            reason: "global-safe off frontier from mine budgeting",
+          });
+        } else if (globalBudget.offFrontierRisk >= 1 - RISK_EPSILON) {
+          forcedMine = preferMoveCandidate(view, forcedMine, {
+            cell,
+            reason: "global-mine off frontier from mine budgeting",
+          });
         }
       }
     }
