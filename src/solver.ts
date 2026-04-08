@@ -596,9 +596,15 @@ function buildLocalExactComponent(
 function findLocalExactInferenceMoves(
   view: GameView,
   components: FrontierComponent[],
-): { forcedSafe: MoveCandidate | null; forcedMine: MoveCandidate | null } {
+): {
+  forcedSafe: MoveCandidate | null;
+  forcedMine: MoveCandidate | null;
+  riskByKey: Map<string, number>;
+} {
   let forcedSafe: MoveCandidate | null = null;
   let forcedMine: MoveCandidate | null = null;
+  const weightedRiskByKey = new Map<string, number>();
+  const totalRiskWeightByKey = new Map<string, number>();
 
   for (const component of components) {
     const cellMembershipCounts = new Map<string, number>();
@@ -658,9 +664,15 @@ function findLocalExactInferenceMoves(
         continue;
       }
 
+      const analysisWeight = localComponent.constraints.length * localComponent.cells.length;
       for (let index = 0; index < analysis.cells.length; index += 1) {
         const cell = analysis.cells[index]!;
         const mineCount = analysis.mineCounts[index]!;
+        const risk = mineCount / analysis.solutionCount;
+        const key = cellKey(cell);
+
+        weightedRiskByKey.set(key, (weightedRiskByKey.get(key) ?? 0) + risk * analysisWeight);
+        totalRiskWeightByKey.set(key, (totalRiskWeightByKey.get(key) ?? 0) + analysisWeight);
 
         if (mineCount === 0) {
           forcedSafe = preferMoveCandidate(view, forcedSafe, {
@@ -677,9 +689,19 @@ function findLocalExactInferenceMoves(
     }
   }
 
+  const riskByKey = new Map<string, number>();
+  for (const [key, totalWeight] of totalRiskWeightByKey) {
+    if (totalWeight <= 0) {
+      continue;
+    }
+
+    riskByKey.set(key, (weightedRiskByKey.get(key) ?? 0) / totalWeight);
+  }
+
   return {
     forcedSafe,
     forcedMine,
+    riskByKey,
   };
 }
 
@@ -1119,13 +1141,20 @@ function chooseRiskBasedMove(view: GameView): Move | null {
   let forcedMine: MoveCandidate | null = null;
   const components = buildFrontierComponents(constraints);
   const inexactComponents: FrontierComponent[] = [];
+  const fallbackRiskEligibleKeys = new Set<string>();
   const mineTotalAnalyses: ComponentMineTotalAnalysis[] = [];
+  let localExactRiskByKey = new Map<string, number>();
 
   for (const component of components) {
     const analysis = analyzeComponentExactly(component);
     if (!analysis) {
       inexactComponents.push(component);
       const groupedAnalysis = analyzeComponentMineTotals(component);
+      if (!groupedAnalysis) {
+        for (const cell of component.cells) {
+          fallbackRiskEligibleKeys.add(cellKey(cell));
+        }
+      }
       mineTotalAnalyses.push({
         cells: component.cells,
         exactAnalysis: null,
@@ -1297,6 +1326,7 @@ function chooseRiskBasedMove(view: GameView): Move | null {
     const localExact = findLocalExactInferenceMoves(view, inexactComponents);
     forcedSafe = localExact.forcedSafe;
     forcedMine = localExact.forcedMine;
+    localExactRiskByKey = localExact.riskByKey;
   }
 
   if (forcedSafe) {
@@ -1325,10 +1355,19 @@ function chooseRiskBasedMove(view: GameView): Move | null {
       continue;
     }
 
+    const localExactRisk =
+      fallbackRiskEligibleKeys.has(key) && localExactRiskByKey.has(key)
+        ? localExactRiskByKey.get(key)!
+        : null;
+    const effectiveRisk = localExactRisk ?? risk;
+
     bestGuess = preferGuessCandidate(view, bestGuess, {
       cell,
-      risk,
-      reason: `guess frontier risk ${risk.toFixed(3)}`,
+      risk: effectiveRisk,
+      reason:
+        localExactRisk === null
+          ? `guess frontier risk ${effectiveRisk.toFixed(3)}`
+          : `guess local-exact risk ${effectiveRisk.toFixed(3)}`,
     });
   }
 
