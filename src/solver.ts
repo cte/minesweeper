@@ -35,6 +35,7 @@ interface GlobalExactRiskAnalysis {
 }
 
 const MAX_EXACT_COMPONENT_CELLS = 18;
+const MAX_EXACT_COMPONENT_GROUPS = 18;
 const MAX_EXACT_SEARCH_NODES = 200_000;
 const MAX_LOCAL_EXACT_ROOTS = 12;
 const RISK_EPSILON = 1e-9;
@@ -271,7 +272,7 @@ function buildFrontierComponents(constraints: ClueConstraint[]): FrontierCompone
 }
 
 function analyzeComponentExactly(component: FrontierComponent): ExactComponentAnalysis | null {
-  if (component.cells.length === 0 || component.cells.length > MAX_EXACT_COMPONENT_CELLS) {
+  if (component.cells.length === 0) {
     return null;
   }
 
@@ -289,42 +290,78 @@ function analyzeComponentExactly(component: FrontierComponent): ExactComponentAn
     }
   }
 
-  const orderedCells = [...component.cells].sort((left, right) => {
-    const leftDegree = constraintMemberships.get(cellKey(left))?.length ?? 0;
-    const rightDegree = constraintMemberships.get(cellKey(right))?.length ?? 0;
-    if (leftDegree !== rightDegree) {
-      return rightDegree - leftDegree;
+  const groupedCells = new Map<
+    string,
+    {
+      cells: CellView[];
+      constraintIndexes: number[];
     }
+  >();
 
-    if (left.y !== right.y) {
-      return left.y - right.y;
-    }
+  for (const cell of component.cells) {
+    const key = cellKey(cell);
+    const memberships = [...(constraintMemberships.get(key) ?? [])];
+    const signature = memberships.join(",");
+    const group = groupedCells.get(signature);
 
-    return left.x - right.x;
-  });
-
-  const cellIndexes = new Map<string, number>();
-  orderedCells.forEach((cell, index) => {
-    cellIndexes.set(cellKey(cell), index);
-  });
-
-  const cellConstraintIndexes = orderedCells.map(() => [] as number[]);
-  const constraintRemainingCells = component.constraints.map((constraint) => constraint.hidden.length);
-  const constraintRemainingMines = component.constraints.map((constraint) => constraint.minesLeft);
-
-  for (let constraintIndex = 0; constraintIndex < component.constraints.length; constraintIndex += 1) {
-    const constraint = component.constraints[constraintIndex]!;
-    for (const cell of constraint.hidden) {
-      const cellIndex = cellIndexes.get(cellKey(cell));
-      if (cellIndex === undefined) {
-        continue;
-      }
-
-      cellConstraintIndexes[cellIndex]!.push(constraintIndex);
+    if (group) {
+      group.cells.push(cell);
+    } else {
+      groupedCells.set(signature, {
+        cells: [cell],
+        constraintIndexes: memberships,
+      });
     }
   }
 
-  const assignment = orderedCells.map(() => false);
+  if (groupedCells.size > MAX_EXACT_COMPONENT_GROUPS) {
+    return null;
+  }
+
+  const orderedGroups = [...groupedCells.values()]
+    .map((group) => ({
+      cells: [...group.cells].sort((left, right) => {
+        if (left.y !== right.y) {
+          return left.y - right.y;
+        }
+
+        return left.x - right.x;
+      }),
+      constraintIndexes: group.constraintIndexes,
+    }))
+    .sort((left, right) => {
+      if (left.constraintIndexes.length !== right.constraintIndexes.length) {
+        return right.constraintIndexes.length - left.constraintIndexes.length;
+      }
+
+      if (left.cells.length !== right.cells.length) {
+        return left.cells.length - right.cells.length;
+      }
+
+      const leftAnchor = left.cells[0]!;
+      const rightAnchor = right.cells[0]!;
+
+      if (leftAnchor.y !== rightAnchor.y) {
+        return leftAnchor.y - rightAnchor.y;
+      }
+
+      return leftAnchor.x - rightAnchor.x;
+    });
+
+  const orderedCells = orderedGroups.flatMap((group) => group.cells);
+  const groupCellIndexes = orderedGroups.map(() => [] as number[]);
+  let orderedCellIndex = 0;
+  for (let groupIndex = 0; groupIndex < orderedGroups.length; groupIndex += 1) {
+    const group = orderedGroups[groupIndex]!;
+    for (let index = 0; index < group.cells.length; index += 1) {
+      groupCellIndexes[groupIndex]!.push(orderedCellIndex);
+      orderedCellIndex += 1;
+    }
+  }
+
+  const constraintRemainingCells = component.constraints.map((constraint) => constraint.hidden.length);
+  const constraintRemainingMines = component.constraints.map((constraint) => constraint.minesLeft);
+  const groupMineCounts = orderedGroups.map(() => 0);
   const mineCounts = orderedCells.map(() => 0);
   const mineCountsByTotal = orderedCells.map(() => Array(orderedCells.length + 1).fill(0));
   let solutionCount = 0;
@@ -332,73 +369,81 @@ function analyzeComponentExactly(component: FrontierComponent): ExactComponentAn
   let searchNodes = 0;
   let aborted = false;
 
-  function search(cellIndex: number, assignedMines: number): void {
+  function search(groupIndex: number, assignedMines: number, assignmentWeight: number): void {
     if (aborted) {
       return;
     }
 
-    if (cellIndex === orderedCells.length) {
+    if (groupIndex === orderedGroups.length) {
       for (const remainingMines of constraintRemainingMines) {
         if (remainingMines !== 0) {
           return;
         }
       }
 
-      solutionCount += 1;
-      solutionCountsByTotal[assignedMines]! += 1;
-      for (let index = 0; index < assignment.length; index += 1) {
-        if (assignment[index]) {
-          mineCounts[index]! += 1;
-          mineCountsByTotal[index]![assignedMines]! += 1;
+      solutionCount += assignmentWeight;
+      solutionCountsByTotal[assignedMines]! += assignmentWeight;
+
+      for (let currentGroupIndex = 0; currentGroupIndex < orderedGroups.length; currentGroupIndex += 1) {
+        const group = orderedGroups[currentGroupIndex]!;
+        const minesInGroup = groupMineCounts[currentGroupIndex]!;
+        if (minesInGroup === 0) {
+          continue;
+        }
+
+        const cellMineContribution = (assignmentWeight * minesInGroup) / group.cells.length;
+        for (const cellIndex of groupCellIndexes[currentGroupIndex]!) {
+          mineCounts[cellIndex]! += cellMineContribution;
+          mineCountsByTotal[cellIndex]![assignedMines]! += cellMineContribution;
         }
       }
       return;
     }
 
-    searchNodes += 1;
-    if (searchNodes > MAX_EXACT_SEARCH_NODES) {
-      aborted = true;
-      return;
-    }
+    const group = orderedGroups[groupIndex]!;
+    const relatedConstraints = group.constraintIndexes;
+    let minMines = 0;
+    let maxMines = group.cells.length;
 
-    branch(cellIndex, assignedMines, false);
-    branch(cellIndex, assignedMines, true);
-  }
-
-  function branch(cellIndex: number, assignedMines: number, isMine: boolean): void {
-    const relatedConstraints = cellConstraintIndexes[cellIndex]!;
-    for (const constraintIndex of relatedConstraints) {
-      constraintRemainingCells[constraintIndex]! -= 1;
-      if (isMine) {
-        constraintRemainingMines[constraintIndex]! -= 1;
-      }
-    }
-
-    let valid = true;
     for (const constraintIndex of relatedConstraints) {
       const remainingCells = constraintRemainingCells[constraintIndex]!;
       const remainingMines = constraintRemainingMines[constraintIndex]!;
-      if (remainingMines < 0 || remainingMines > remainingCells) {
-        valid = false;
-        break;
+      minMines = Math.max(minMines, remainingMines - (remainingCells - group.cells.length));
+      maxMines = Math.min(maxMines, remainingMines);
+    }
+
+    if (minMines > maxMines) {
+      return;
+    }
+
+    for (let minesInGroup = minMines; minesInGroup <= maxMines; minesInGroup += 1) {
+      searchNodes += 1;
+      if (searchNodes > MAX_EXACT_SEARCH_NODES) {
+        aborted = true;
+        return;
       }
-    }
 
-    if (valid) {
-      assignment[cellIndex] = isMine;
-      search(cellIndex + 1, assignedMines + (isMine ? 1 : 0));
-      assignment[cellIndex] = false;
-    }
+      for (const constraintIndex of relatedConstraints) {
+        constraintRemainingCells[constraintIndex]! -= group.cells.length;
+        constraintRemainingMines[constraintIndex]! -= minesInGroup;
+      }
 
-    for (const constraintIndex of relatedConstraints) {
-      constraintRemainingCells[constraintIndex]! += 1;
-      if (isMine) {
-        constraintRemainingMines[constraintIndex]! += 1;
+      groupMineCounts[groupIndex] = minesInGroup;
+      search(
+        groupIndex + 1,
+        assignedMines + minesInGroup,
+        assignmentWeight * combinationCount(group.cells.length, minesInGroup),
+      );
+      groupMineCounts[groupIndex] = 0;
+
+      for (const constraintIndex of relatedConstraints) {
+        constraintRemainingCells[constraintIndex]! += group.cells.length;
+        constraintRemainingMines[constraintIndex]! += minesInGroup;
       }
     }
   }
 
-  search(0, 0);
+  search(0, 0, 1);
 
   if (aborted || solutionCount === 0) {
     return null;
