@@ -7,21 +7,20 @@
     "play": "tsx src/cli.ts",
     "score": "tsx src/score.ts",
     "score:holdout": "tsx src/score.ts --benchmark bench/holdout.json",
-    "record": "tsx src/record.ts",
-    "research:init": "tsx src/research-init.ts",
-    "research:trial": "tsx src/research-trial.ts",
-    "research:loop": "tsx src/research-loop.ts",
-    "research:codex-edit": "tsx src/research-codex.ts",
-    "research:loop:codex": "tsx src/research-loop-codex.ts",
-    "research:dashboard": "pnpm dashboard:build && tsx src/research-dashboard.ts",
-    "research:dashboard:api": "tsx src/research-dashboard.ts -- --api-only",
-    "dashboard:dev": "pnpm --filter @autoresearch/dashboard run dev",
-    "dashboard:build": "pnpm --filter @autoresearch/dashboard run build",
-    "dashboard:check": "pnpm --filter @autoresearch/dashboard run check",
-    "check": "pnpm --filter @autoresearch/runtime check && pnpm dashboard:check && tsc --noEmit"
+    "check": "tsc --noEmit",
+    "patchloop:init": "node scripts/patchloop.mjs init",
+    "patchloop:record": "node scripts/patchloop.mjs record",
+    "patchloop:trial": "node scripts/patchloop.mjs trial",
+    "patchloop:loop": "node scripts/patchloop.mjs loop",
+    "patchloop:codex-edit": "node scripts/patchloop.mjs codex-edit",
+    "patchloop:loop:codex": "node scripts/patchloop.mjs loop-codex",
+    "patchloop:runs": "node scripts/patchloop.mjs runs",
+    "patchloop:activate-run": "node scripts/patchloop.mjs activate-run",
+    "patchloop:dashboard": "node scripts/patchloop.mjs dashboard",
+    "patchloop:dashboard:dev": "node scripts/patchloop.mjs dashboard --dev"
   },
   "dependencies": {
-    "@autoresearch/runtime": "workspace:*"
+    "@patchloop/core": "file:../patchloop/packages/core"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",

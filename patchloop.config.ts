@@ -1,15 +1,9 @@
-import path from "node:path";
+import { createJsonCommandHooks, definePatchloopConfig } from "@patchloop/core";
 
-import { createJsonCommandHooks, defineResearchProject } from "@autoresearch/runtime";
-
-import { getProjectRoot } from "./project.js";
-
-const projectRoot = getProjectRoot();
-
-export const minesweeperResearch = defineResearchProject({
-  projectName: "a deterministic Minesweeper solver",
-  projectRoot,
+export default definePatchloopConfig({
+  projectName: "deterministic Minesweeper solver",
   editablePaths: ["src/solver.ts"],
+  branchPrefix: "patchloop/",
   metrics: {
     primaryLabel: "win_rate",
     primaryDirection: "maximize",
@@ -20,23 +14,21 @@ export const minesweeperResearch = defineResearchProject({
     objective: "Improve the solver on the fixed evaluation benchmark. Maximize win_rate first, then progress_score.",
     rules: [
       "Edit only src/solver.ts.",
-      "Do not edit the game engine, benchmarks, or research harness.",
+      "Do not edit the game engine, benchmarks, or Patchloop wiring.",
       "Keep the solver deterministic and legal.",
-      "Prefer simple changes over complicated ones.",
+      "Prefer simpler logic when scores are equal.",
       "Return legal moves only.",
     ],
     notes: [
-      `Main benchmark: ${path.join(projectRoot, "bench", "eval.json")}`,
-      `Holdout benchmark: ${path.join(projectRoot, "bench", "holdout.json")}`,
+      "Main benchmark: bench/eval.json",
+      "Holdout benchmark: bench/holdout.json",
     ],
-  },
-  dashboard: {
-    distDir: path.join(projectRoot, "packages", "dashboard", "dist"),
+    programPath: "patchloop.program.md",
   },
   hooks: createJsonCommandHooks({
+    checkCommand: ["pnpm", "check"],
     evalCommand: ["pnpm", "score", "--", "--json"],
     holdoutCommand: ["pnpm", "score:holdout", "--", "--json"],
-    checkCommand: ["pnpm", "check"],
     candidatePath: "solver",
     primaryPath: "winRate",
     secondaryPath: "progressScore",
@@ -48,6 +40,8 @@ export const minesweeperResearch = defineResearchProject({
       stalled: "stalled",
       avg_steps: "avgSteps",
       elapsed_ms: "elapsedMs",
+      suites: "suites",
+      failed_cases: "failedCases",
     },
   }),
 });

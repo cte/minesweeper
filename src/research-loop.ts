@@ -1,5 +1,0 @@
-import { runResearchLoopCli } from "@autoresearch/runtime";
-
-import { minesweeperResearch } from "./autoresearch.js";
-
-void runResearchLoopCli(minesweeperResearch, process.argv.slice(2));
