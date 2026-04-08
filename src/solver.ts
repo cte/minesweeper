@@ -15,7 +15,9 @@ interface FrontierComponent {
 interface ExactComponentAnalysis {
   cells: CellView[];
   mineCounts: number[];
+  mineCountsByTotal: number[][];
   solutionCount: number;
+  solutionCountsByTotal: number[];
 }
 
 interface MoveCandidate {
@@ -27,9 +29,29 @@ interface GuessCandidate extends MoveCandidate {
   risk: number;
 }
 
+interface GlobalExactRiskAnalysis {
+  frontierRiskByKey: Map<string, number>;
+  offFrontierRisk: number | null;
+}
+
 const MAX_EXACT_COMPONENT_CELLS = 18;
 const MAX_EXACT_SEARCH_NODES = 200_000;
 const RISK_EPSILON = 1e-9;
+
+function combinationCount(total: number, selected: number): number {
+  if (selected < 0 || selected > total) {
+    return 0;
+  }
+
+  const k = Math.min(selected, total - selected);
+  let result = 1;
+
+  for (let index = 1; index <= k; index += 1) {
+    result = (result * (total - k + index)) / index;
+  }
+
+  return result;
+}
 
 function neighbors(view: GameView, x: number, y: number): CellView[] {
   const result: CellView[] = [];
@@ -303,11 +325,13 @@ function analyzeComponentExactly(component: FrontierComponent): ExactComponentAn
 
   const assignment = orderedCells.map(() => false);
   const mineCounts = orderedCells.map(() => 0);
+  const mineCountsByTotal = orderedCells.map(() => Array(orderedCells.length + 1).fill(0));
   let solutionCount = 0;
+  const solutionCountsByTotal = Array(orderedCells.length + 1).fill(0);
   let searchNodes = 0;
   let aborted = false;
 
-  function search(cellIndex: number): void {
+  function search(cellIndex: number, assignedMines: number): void {
     if (aborted) {
       return;
     }
@@ -320,9 +344,11 @@ function analyzeComponentExactly(component: FrontierComponent): ExactComponentAn
       }
 
       solutionCount += 1;
+      solutionCountsByTotal[assignedMines]! += 1;
       for (let index = 0; index < assignment.length; index += 1) {
         if (assignment[index]) {
           mineCounts[index]! += 1;
+          mineCountsByTotal[index]![assignedMines]! += 1;
         }
       }
       return;
@@ -334,11 +360,11 @@ function analyzeComponentExactly(component: FrontierComponent): ExactComponentAn
       return;
     }
 
-    branch(cellIndex, false);
-    branch(cellIndex, true);
+    branch(cellIndex, assignedMines, false);
+    branch(cellIndex, assignedMines, true);
   }
 
-  function branch(cellIndex: number, isMine: boolean): void {
+  function branch(cellIndex: number, assignedMines: number, isMine: boolean): void {
     const relatedConstraints = cellConstraintIndexes[cellIndex]!;
     for (const constraintIndex of relatedConstraints) {
       constraintRemainingCells[constraintIndex]! -= 1;
@@ -359,7 +385,7 @@ function analyzeComponentExactly(component: FrontierComponent): ExactComponentAn
 
     if (valid) {
       assignment[cellIndex] = isMine;
-      search(cellIndex + 1);
+      search(cellIndex + 1, assignedMines + (isMine ? 1 : 0));
       assignment[cellIndex] = false;
     }
 
@@ -371,7 +397,7 @@ function analyzeComponentExactly(component: FrontierComponent): ExactComponentAn
     }
   }
 
-  search(0);
+  search(0, 0);
 
   if (aborted || solutionCount === 0) {
     return null;
@@ -380,7 +406,182 @@ function analyzeComponentExactly(component: FrontierComponent): ExactComponentAn
   return {
     cells: orderedCells,
     mineCounts,
+    mineCountsByTotal,
     solutionCount,
+    solutionCountsByTotal,
+  };
+}
+
+function combineExactAnalysesWithMineBudget(
+  analyses: ExactComponentAnalysis[],
+  remainingMines: number,
+  offFrontierCount: number,
+): GlobalExactRiskAnalysis | null {
+  if (analyses.length === 0) {
+    return null;
+  }
+
+  const totalCells =
+    analyses.reduce((sum, analysis) => sum + analysis.cells.length, 0) + offFrontierCount;
+  const boundedRemainingMines = Math.max(0, Math.min(remainingMines, totalCells));
+  const offFrontierWaysByMines = Array.from(
+    { length: boundedRemainingMines + 1 },
+    (_, mines) => combinationCount(offFrontierCount, mines),
+  );
+
+  const prefixWays = Array.from({ length: analyses.length + 1 }, () =>
+    Array(boundedRemainingMines + 1).fill(0),
+  );
+  prefixWays[0]![0] = 1;
+
+  for (let analysisIndex = 0; analysisIndex < analyses.length; analysisIndex += 1) {
+    const analysis = analyses[analysisIndex]!;
+    for (let usedMines = 0; usedMines <= boundedRemainingMines; usedMines += 1) {
+      const baseWays = prefixWays[analysisIndex]![usedMines]!;
+      if (baseWays === 0) {
+        continue;
+      }
+
+      const maxComponentMines = Math.min(
+        analysis.solutionCountsByTotal.length - 1,
+        boundedRemainingMines - usedMines,
+      );
+      for (let componentMines = 0; componentMines <= maxComponentMines; componentMines += 1) {
+        const componentWays = analysis.solutionCountsByTotal[componentMines]!;
+        if (componentWays === 0) {
+          continue;
+        }
+
+        prefixWays[analysisIndex + 1]![usedMines + componentMines]! += baseWays * componentWays;
+      }
+    }
+  }
+
+  const suffixWays = Array.from({ length: analyses.length + 1 }, () =>
+    Array(boundedRemainingMines + 1).fill(0),
+  );
+  suffixWays[analyses.length]![0] = 1;
+
+  for (let analysisIndex = analyses.length - 1; analysisIndex >= 0; analysisIndex -= 1) {
+    const analysis = analyses[analysisIndex]!;
+    for (let usedMines = 0; usedMines <= boundedRemainingMines; usedMines += 1) {
+      const baseWays = suffixWays[analysisIndex + 1]![usedMines]!;
+      if (baseWays === 0) {
+        continue;
+      }
+
+      const maxComponentMines = Math.min(
+        analysis.solutionCountsByTotal.length - 1,
+        boundedRemainingMines - usedMines,
+      );
+      for (let componentMines = 0; componentMines <= maxComponentMines; componentMines += 1) {
+        const componentWays = analysis.solutionCountsByTotal[componentMines]!;
+        if (componentWays === 0) {
+          continue;
+        }
+
+        suffixWays[analysisIndex]![usedMines + componentMines]! += baseWays * componentWays;
+      }
+    }
+  }
+
+  let totalWeightedSolutions = 0;
+  let offFrontierMineWeight = 0;
+
+  for (let frontierMines = 0; frontierMines <= boundedRemainingMines; frontierMines += 1) {
+    const frontierWays = prefixWays[analyses.length]![frontierMines]!;
+    const offFrontierMines = boundedRemainingMines - frontierMines;
+    const offFrontierWays = offFrontierWaysByMines[offFrontierMines] ?? 0;
+    if (frontierWays === 0 || offFrontierWays === 0) {
+      continue;
+    }
+
+    const weightedWays = frontierWays * offFrontierWays;
+    totalWeightedSolutions += weightedWays;
+    offFrontierMineWeight += weightedWays * offFrontierMines;
+  }
+
+  if (totalWeightedSolutions === 0) {
+    return null;
+  }
+
+  const frontierRiskByKey = new Map<string, number>();
+
+  for (let analysisIndex = 0; analysisIndex < analyses.length; analysisIndex += 1) {
+    const analysis = analyses[analysisIndex]!;
+    const otherWaysByTotal = Array(boundedRemainingMines + 1).fill(0);
+
+    for (let leftMines = 0; leftMines <= boundedRemainingMines; leftMines += 1) {
+      const leftWays = prefixWays[analysisIndex]![leftMines]!;
+      if (leftWays === 0) {
+        continue;
+      }
+
+      for (let rightMines = 0; leftMines + rightMines <= boundedRemainingMines; rightMines += 1) {
+        const rightWays = suffixWays[analysisIndex + 1]![rightMines]!;
+        if (rightWays === 0) {
+          continue;
+        }
+
+        otherWaysByTotal[leftMines + rightMines]! += leftWays * rightWays;
+      }
+    }
+
+    const totalWeightByComponentMineTotal = Array(analysis.solutionCountsByTotal.length).fill(0);
+    for (
+      let componentMines = 0;
+      componentMines < analysis.solutionCountsByTotal.length;
+      componentMines += 1
+    ) {
+      if (analysis.solutionCountsByTotal[componentMines] === 0) {
+        continue;
+      }
+
+      let componentWeight = 0;
+      for (
+        let otherMines = 0;
+        otherMines + componentMines <= boundedRemainingMines;
+        otherMines += 1
+      ) {
+        const otherWays = otherWaysByTotal[otherMines]!;
+        const offFrontierMines = boundedRemainingMines - otherMines - componentMines;
+        const offFrontierWays = offFrontierWaysByMines[offFrontierMines] ?? 0;
+        if (otherWays === 0 || offFrontierWays === 0) {
+          continue;
+        }
+
+        componentWeight += otherWays * offFrontierWays;
+      }
+
+      totalWeightByComponentMineTotal[componentMines] = componentWeight;
+    }
+
+    for (let cellIndex = 0; cellIndex < analysis.cells.length; cellIndex += 1) {
+      let mineWeight = 0;
+      const cellMineCountsByTotal = analysis.mineCountsByTotal[cellIndex]!;
+
+      for (
+        let componentMines = 0;
+        componentMines < cellMineCountsByTotal.length;
+        componentMines += 1
+      ) {
+        const cellMineCount = cellMineCountsByTotal[componentMines]!;
+        const componentWeight = totalWeightByComponentMineTotal[componentMines]!;
+        if (cellMineCount === 0 || componentWeight === 0) {
+          continue;
+        }
+
+        mineWeight += cellMineCount * componentWeight;
+      }
+
+      frontierRiskByKey.set(cellKey(analysis.cells[cellIndex]!), mineWeight / totalWeightedSolutions);
+    }
+  }
+
+  return {
+    frontierRiskByKey,
+    offFrontierRisk:
+      offFrontierCount > 0 ? offFrontierMineWeight / (totalWeightedSolutions * offFrontierCount) : null,
   };
 }
 
@@ -409,12 +610,18 @@ function chooseRiskBasedMove(view: GameView): Move | null {
 
   let forcedSafe: MoveCandidate | null = null;
   let forcedMine: MoveCandidate | null = null;
+  const components = buildFrontierComponents(constraints);
+  const exactAnalyses: ExactComponentAnalysis[] = [];
+  let allComponentsExact = true;
 
-  for (const component of buildFrontierComponents(constraints)) {
+  for (const component of components) {
     const analysis = analyzeComponentExactly(component);
     if (!analysis) {
+      allComponentsExact = false;
       continue;
     }
+
+    exactAnalyses.push(analysis);
 
     for (let index = 0; index < analysis.cells.length; index += 1) {
       const cell = analysis.cells[index]!;
@@ -438,6 +645,61 @@ function chooseRiskBasedMove(view: GameView): Move | null {
           cell,
           reason: `exact-mine from ${analysis.solutionCount} frontier solutions`,
         });
+      }
+    }
+  }
+
+  let backgroundRisk = Math.min(1, Math.max(0, view.remainingMinesEstimate / unresolved.length));
+
+  if (allComponentsExact && components.length > 0) {
+    const globalExact = combineExactAnalysesWithMineBudget(
+      exactAnalyses,
+      view.remainingMinesEstimate,
+      unresolved.length - frontierCellsByKey.size,
+    );
+
+    if (globalExact) {
+      backgroundRisk = globalExact.offFrontierRisk ?? backgroundRisk;
+
+      for (const [key, risk] of globalExact.frontierRiskByKey) {
+        frontierRiskByKey.set(key, risk);
+
+        const cell = frontierCellsByKey.get(key);
+        if (!cell) {
+          continue;
+        }
+
+        if (risk <= RISK_EPSILON) {
+          forcedSafe = preferMoveCandidate(view, forcedSafe, {
+            cell,
+            reason: "global-safe from exact frontier mine budgeting",
+          });
+        } else if (risk >= 1 - RISK_EPSILON) {
+          forcedMine = preferMoveCandidate(view, forcedMine, {
+            cell,
+            reason: "global-mine from exact frontier mine budgeting",
+          });
+        }
+      }
+
+      if (globalExact.offFrontierRisk !== null) {
+        for (const cell of unresolved) {
+          if (frontierRiskByKey.has(cellKey(cell))) {
+            continue;
+          }
+
+          if (globalExact.offFrontierRisk <= RISK_EPSILON) {
+            forcedSafe = preferMoveCandidate(view, forcedSafe, {
+              cell,
+              reason: "global-safe off frontier from exact mine budgeting",
+            });
+          } else if (globalExact.offFrontierRisk >= 1 - RISK_EPSILON) {
+            forcedMine = preferMoveCandidate(view, forcedMine, {
+              cell,
+              reason: "global-mine off frontier from exact mine budgeting",
+            });
+          }
+        }
       }
     }
   }
@@ -475,7 +737,6 @@ function chooseRiskBasedMove(view: GameView): Move | null {
     });
   }
 
-  const globalRisk = Math.min(1, Math.max(0, view.remainingMinesEstimate / unresolved.length));
   for (const cell of unresolved) {
     if (frontierRiskByKey.has(cellKey(cell))) {
       continue;
@@ -483,8 +744,8 @@ function chooseRiskBasedMove(view: GameView): Move | null {
 
     bestGuess = preferGuessCandidate(view, bestGuess, {
       cell,
-      risk: globalRisk,
-      reason: `guess global risk ${globalRisk.toFixed(3)}`,
+      risk: backgroundRisk,
+      reason: `guess global risk ${backgroundRisk.toFixed(3)}`,
     });
   }
 
