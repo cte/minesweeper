@@ -20,6 +20,18 @@ interface ExactComponentAnalysis {
   solutionCountsByTotal: number[];
 }
 
+interface GroupedCellAnalysis {
+  cells: CellView[];
+  mineCount: number;
+  mineCountsByTotal: number[];
+}
+
+interface GroupedComponentAnalysis {
+  groups: GroupedCellAnalysis[];
+  solutionCount: number;
+  solutionCountsByTotal: number[];
+}
+
 interface MoveCandidate {
   cell: CellView;
   reason: string;
@@ -32,6 +44,7 @@ interface GuessCandidate extends MoveCandidate {
 interface ComponentMineTotalAnalysis {
   cells: CellView[];
   exactAnalysis: ExactComponentAnalysis | null;
+  groupedAnalysis: GroupedComponentAnalysis | null;
   solutionCountsByTotal: number[];
 }
 
@@ -670,7 +683,7 @@ function findLocalExactInferenceMoves(
   };
 }
 
-function analyzeComponentMineTotals(component: FrontierComponent): number[] | null {
+function analyzeComponentMineTotals(component: FrontierComponent): GroupedComponentAnalysis | null {
   if (component.cells.length === 0) {
     return null;
   }
@@ -750,6 +763,9 @@ function analyzeComponentMineTotals(component: FrontierComponent): number[] | nu
   const totalCells = orderedGroups.reduce((sum, group) => sum + group.cells.length, 0);
   const constraintRemainingCells = component.constraints.map((constraint) => constraint.hidden.length);
   const constraintRemainingMines = component.constraints.map((constraint) => constraint.minesLeft);
+  const groupMineCounts = orderedGroups.map(() => 0);
+  const mineCounts = orderedGroups.map(() => 0);
+  const mineCountsByTotal = orderedGroups.map(() => Array(totalCells + 1).fill(0));
   const solutionCountsByTotal = Array(totalCells + 1).fill(0);
   let solutionCount = 0;
   let searchNodes = 0;
@@ -769,6 +785,17 @@ function analyzeComponentMineTotals(component: FrontierComponent): number[] | nu
 
       solutionCount += assignmentWeight;
       solutionCountsByTotal[assignedMines]! += assignmentWeight;
+
+      for (let currentGroupIndex = 0; currentGroupIndex < orderedGroups.length; currentGroupIndex += 1) {
+        const minesInGroup = groupMineCounts[currentGroupIndex]!;
+        if (minesInGroup === 0) {
+          continue;
+        }
+
+        const weightedMineCount = assignmentWeight * minesInGroup;
+        mineCounts[currentGroupIndex]! += weightedMineCount;
+        mineCountsByTotal[currentGroupIndex]![assignedMines]! += weightedMineCount;
+      }
       return;
     }
 
@@ -800,11 +827,13 @@ function analyzeComponentMineTotals(component: FrontierComponent): number[] | nu
         constraintRemainingMines[constraintIndex]! -= minesInGroup;
       }
 
+      groupMineCounts[groupIndex] = minesInGroup;
       search(
         groupIndex + 1,
         assignedMines + minesInGroup,
         assignmentWeight * combinationCount(group.cells.length, minesInGroup),
       );
+      groupMineCounts[groupIndex] = 0;
 
       for (const constraintIndex of relatedConstraints) {
         constraintRemainingCells[constraintIndex]! += group.cells.length;
@@ -819,7 +848,15 @@ function analyzeComponentMineTotals(component: FrontierComponent): number[] | nu
     return null;
   }
 
-  return solutionCountsByTotal;
+  return {
+    groups: orderedGroups.map((group, index) => ({
+      cells: group.cells,
+      mineCount: mineCounts[index]!,
+      mineCountsByTotal: mineCountsByTotal[index]!,
+    })),
+    solutionCount,
+    solutionCountsByTotal,
+  };
 }
 
 function buildFallbackMineTotalWeights(component: FrontierComponent): number[] {
@@ -996,32 +1033,54 @@ function combineComponentMineTotalsWithBudget(
         component.solutionCountsByTotal[componentMines]! * componentWeight;
     }
 
-    if (!component.exactAnalysis) {
+    if (component.exactAnalysis) {
+      for (let cellIndex = 0; cellIndex < component.exactAnalysis.cells.length; cellIndex += 1) {
+        let mineWeight = 0;
+        const cellMineCountsByTotal = component.exactAnalysis.mineCountsByTotal[cellIndex]!;
+
+        for (
+          let componentMines = 0;
+          componentMines < cellMineCountsByTotal.length;
+          componentMines += 1
+        ) {
+          const cellMineCount = cellMineCountsByTotal[componentMines]!;
+          const componentWeight = totalWeightByComponentMineTotal[componentMines]!;
+          if (cellMineCount === 0 || componentWeight === 0) {
+            continue;
+          }
+
+          mineWeight += cellMineCount * componentWeight;
+        }
+
+        frontierRiskByKey.set(
+          cellKey(component.exactAnalysis.cells[cellIndex]!),
+          mineWeight / totalWeightedSolutions,
+        );
+      }
       continue;
     }
 
-    for (let cellIndex = 0; cellIndex < component.exactAnalysis.cells.length; cellIndex += 1) {
-      let mineWeight = 0;
-      const cellMineCountsByTotal = component.exactAnalysis.mineCountsByTotal[cellIndex]!;
+    if (!component.groupedAnalysis) {
+      continue;
+    }
 
-      for (
-        let componentMines = 0;
-        componentMines < cellMineCountsByTotal.length;
-        componentMines += 1
-      ) {
-        const cellMineCount = cellMineCountsByTotal[componentMines]!;
+    for (const group of component.groupedAnalysis.groups) {
+      let mineWeight = 0;
+
+      for (let componentMines = 0; componentMines < group.mineCountsByTotal.length; componentMines += 1) {
+        const groupMineCount = group.mineCountsByTotal[componentMines]!;
         const componentWeight = totalWeightByComponentMineTotal[componentMines]!;
-        if (cellMineCount === 0 || componentWeight === 0) {
+        if (groupMineCount === 0 || componentWeight === 0) {
           continue;
         }
 
-        mineWeight += cellMineCount * componentWeight;
+        mineWeight += groupMineCount * componentWeight;
       }
 
-      frontierRiskByKey.set(
-        cellKey(component.exactAnalysis.cells[cellIndex]!),
-        mineWeight / totalWeightedSolutions,
-      );
+      const risk = mineWeight / (group.cells.length * totalWeightedSolutions);
+      for (const cell of group.cells) {
+        frontierRiskByKey.set(cellKey(cell), risk);
+      }
     }
   }
 
@@ -1066,18 +1125,45 @@ function chooseRiskBasedMove(view: GameView): Move | null {
     const analysis = analyzeComponentExactly(component);
     if (!analysis) {
       inexactComponents.push(component);
+      const groupedAnalysis = analyzeComponentMineTotals(component);
       mineTotalAnalyses.push({
         cells: component.cells,
         exactAnalysis: null,
+        groupedAnalysis,
         solutionCountsByTotal:
-          analyzeComponentMineTotals(component) ?? buildFallbackMineTotalWeights(component),
+          groupedAnalysis?.solutionCountsByTotal ?? buildFallbackMineTotalWeights(component),
       });
+
+      if (groupedAnalysis) {
+        for (const group of groupedAnalysis.groups) {
+          const risk = group.mineCount / (groupedAnalysis.solutionCount * group.cells.length);
+
+          for (const cell of group.cells) {
+            const key = cellKey(cell);
+            frontierCellsByKey.set(key, cell);
+            frontierRiskByKey.set(key, risk);
+
+            if (risk <= RISK_EPSILON) {
+              forcedSafe = preferMoveCandidate(view, forcedSafe, {
+                cell,
+                reason: `grouped-safe from ${groupedAnalysis.solutionCount} frontier solutions`,
+              });
+            } else if (risk >= 1 - RISK_EPSILON) {
+              forcedMine = preferMoveCandidate(view, forcedMine, {
+                cell,
+                reason: `grouped-mine from ${groupedAnalysis.solutionCount} frontier solutions`,
+              });
+            }
+          }
+        }
+      }
       continue;
     }
 
     mineTotalAnalyses.push({
       cells: component.cells,
       exactAnalysis: analysis,
+      groupedAnalysis: null,
       solutionCountsByTotal: analysis.solutionCountsByTotal,
     });
 
