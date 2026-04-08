@@ -1,5 +1,12 @@
 import type { CellView, GameView, Move, Solver } from "./types.js";
 
+interface ClueConstraint {
+  cell: CellView;
+  hidden: CellView[];
+  hiddenKeys: Set<string>;
+  minesLeft: number;
+}
+
 function neighbors(view: GameView, x: number, y: number): CellView[] {
   const result: CellView[] = [];
   for (let dy = -1; dy <= 1; dy += 1) {
@@ -51,6 +58,109 @@ function firstHiddenCell(view: GameView): Move | null {
   return null;
 }
 
+function cellKey(cell: Pick<CellView, "x" | "y">): string {
+  return `${cell.x},${cell.y}`;
+}
+
+function collectClueConstraints(view: GameView): ClueConstraint[] {
+  const constraints: ClueConstraint[] = [];
+
+  for (const row of view.board) {
+    for (const cell of row) {
+      if (!cell.revealed || cell.adjacentMines === null || cell.adjacentMines === 0) {
+        continue;
+      }
+
+      const around = neighbors(view, cell.x, cell.y);
+      const hidden = around.filter((neighbor) => !neighbor.revealed && !neighbor.flagged);
+      if (hidden.length === 0) {
+        continue;
+      }
+
+      const flagged = around.filter((neighbor) => neighbor.flagged).length;
+      const minesLeft = cell.adjacentMines - flagged;
+
+      if (minesLeft <= 0 || minesLeft >= hidden.length) {
+        continue;
+      }
+
+      constraints.push({
+        cell,
+        hidden,
+        hiddenKeys: new Set(hidden.map((neighbor) => cellKey(neighbor))),
+        minesLeft,
+      });
+    }
+  }
+
+  return constraints;
+}
+
+function isStrictSubset(subset: Set<string>, superset: Set<string>): boolean {
+  if (subset.size >= superset.size) {
+    return false;
+  }
+
+  for (const key of subset) {
+    if (!superset.has(key)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function findSubsetInferenceMove(view: GameView): Move | null {
+  const constraints = collectClueConstraints(view);
+
+  for (const subsetConstraint of constraints) {
+    for (const supersetConstraint of constraints) {
+      if (subsetConstraint === supersetConstraint) {
+        continue;
+      }
+
+      if (!isStrictSubset(subsetConstraint.hiddenKeys, supersetConstraint.hiddenKeys)) {
+        continue;
+      }
+
+      const difference = supersetConstraint.hidden.filter(
+        (cell) => !subsetConstraint.hiddenKeys.has(cellKey(cell)),
+      );
+      const minesDelta = supersetConstraint.minesLeft - subsetConstraint.minesLeft;
+
+      if (difference.length === 0) {
+        continue;
+      }
+
+      if (minesDelta === 0) {
+        const target = firstHiddenNeighbor(difference);
+        if (target) {
+          return {
+            kind: "reveal",
+            x: target.x,
+            y: target.y,
+            reason: `subset-safe from clues ${subsetConstraint.cell.x},${subsetConstraint.cell.y} and ${supersetConstraint.cell.x},${supersetConstraint.cell.y}`,
+          };
+        }
+      }
+
+      if (minesDelta === difference.length) {
+        const target = firstHiddenNeighbor(difference);
+        if (target) {
+          return {
+            kind: "flag",
+            x: target.x,
+            y: target.y,
+            reason: `subset-mine from clues ${subsetConstraint.cell.x},${subsetConstraint.cell.y} and ${supersetConstraint.cell.x},${supersetConstraint.cell.y}`,
+          };
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
 export class BaselineSolver implements Solver {
   readonly name = "baseline-direct-rules";
 
@@ -98,6 +208,11 @@ export class BaselineSolver implements Solver {
           }
         }
       }
+    }
+
+    const subsetMove = findSubsetInferenceMove(view);
+    if (subsetMove) {
+      return subsetMove;
     }
 
     return firstHiddenCell(view);
