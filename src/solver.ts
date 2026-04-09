@@ -348,6 +348,41 @@ function computeAdaptiveClueGuardWeight(component: FrontierComponent, cell: Cell
   return Math.min(0.7, 0.25 + densityPressure * 0.18 + overlapPressure + tightNeighborhoodPressure);
 }
 
+function computePosteriorMineTotalCertainty(weights: number[]): number {
+  let totalWeight = 0;
+  let distinctTotals = 0;
+
+  for (const weight of weights) {
+    if (weight <= 0) {
+      continue;
+    }
+
+    totalWeight += weight;
+    distinctTotals += 1;
+  }
+
+  if (totalWeight <= 0 || distinctTotals <= 1) {
+    return 1;
+  }
+
+  let entropy = 0;
+  for (const weight of weights) {
+    if (weight <= 0) {
+      continue;
+    }
+
+    const probability = weight / totalWeight;
+    entropy -= probability * Math.log(probability);
+  }
+
+  const maxEntropy = Math.log(distinctTotals);
+  if (maxEntropy <= 0) {
+    return 1;
+  }
+
+  return Math.max(0, Math.min(1, 1 - entropy / maxEntropy));
+}
+
 function collectClueConstraints(view: GameView): ClueConstraint[] {
   const constraints: ClueConstraint[] = [];
 
@@ -1441,6 +1476,7 @@ function chooseRiskBasedMove(view: GameView): Move | null {
   const localExactOverrideEligibleKeys = new Set<string>();
   const fallbackRiskEligibleKeys = new Set<string>();
   const fallbackRiskGuardWeightByKey = new Map<string, number>();
+  const posteriorMineTotalCertaintyByKey = new Map<string, number>();
   const mineTotalAnalyses: ComponentMineTotalAnalysis[] = [];
   let localExactRiskByKey = new Map<string, number>();
 
@@ -1578,6 +1614,13 @@ function chooseRiskBasedMove(view: GameView): Move | null {
 
     for (let componentIndex = 0; componentIndex < mineTotalAnalyses.length; componentIndex += 1) {
       const componentAnalysis = mineTotalAnalyses[componentIndex]!;
+      const componentPosteriorCertainty = computePosteriorMineTotalCertainty(
+        globalBudget.posteriorWeightsByComponent[componentIndex]!,
+      );
+      for (const cell of componentAnalysis.cells) {
+        posteriorMineTotalCertaintyByKey.set(cellKey(cell), componentPosteriorCertainty);
+      }
+
       if (componentAnalysis.exactAnalysis) {
         continue;
       }
@@ -1684,7 +1727,9 @@ function chooseRiskBasedMove(view: GameView): Move | null {
     const directConstraintRisk = fallbackRiskEligibleKeys.has(key)
       ? directConstraintRiskByKey.get(key) ?? null
       : null;
-    const clueGuardWeight = fallbackRiskGuardWeightByKey.get(key) ?? 0.25;
+    const clueGuardWeight =
+      (fallbackRiskGuardWeightByKey.get(key) ?? 0.25) *
+      (1 - (posteriorMineTotalCertaintyByKey.get(key) ?? 0));
     const effectiveRisk =
       localExactRisk ??
       (directConstraintRisk === null ? risk : risk + (directConstraintRisk - risk) * clueGuardWeight);
