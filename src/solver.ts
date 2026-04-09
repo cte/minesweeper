@@ -60,6 +60,9 @@ const MAX_EXACT_SEARCH_NODES = 200_000;
 const MAX_COMPONENT_TOTAL_GROUPS = 24;
 const MAX_COMPONENT_TOTAL_SEARCH_NODES = 400_000;
 const MAX_LOCAL_EXACT_ROOTS = 12;
+const APPROXIMATE_BP_ITERATIONS = 8;
+const APPROXIMATE_BP_DAMPING = 0.6;
+const APPROXIMATE_BP_EPSILON = 1e-6;
 const RISK_EPSILON = 1e-9;
 
 function combinationCount(total: number, selected: number): number {
@@ -75,6 +78,29 @@ function combinationCount(total: number, selected: number): number {
   }
 
   return result;
+}
+
+function clampProbability(probability: number, fallback: number): number {
+  const boundedFallback = Math.min(1 - APPROXIMATE_BP_EPSILON, Math.max(APPROXIMATE_BP_EPSILON, fallback));
+  if (!Number.isFinite(probability)) {
+    return boundedFallback;
+  }
+
+  return Math.min(1 - APPROXIMATE_BP_EPSILON, Math.max(APPROXIMATE_BP_EPSILON, probability));
+}
+
+function probabilityToLogOdds(probability: number): number {
+  return Math.log(probability / (1 - probability));
+}
+
+function logOddsToProbability(logOdds: number): number {
+  if (logOdds >= 0) {
+    const inverse = Math.exp(-logOdds);
+    return 1 / (1 + inverse);
+  }
+
+  const exponent = Math.exp(logOdds);
+  return exponent / (1 + exponent);
 }
 
 function neighbors(view: GameView, x: number, y: number): CellView[] {
@@ -906,6 +932,145 @@ function buildFallbackMineTotalWeights(component: FrontierComponent): number[] {
   return Array.from({ length: totalCells + 1 }, (_, mines) => combinationCount(totalCells, mines));
 }
 
+function estimateComponentRisksByBeliefPropagation(
+  component: FrontierComponent,
+  defaultRisk: number,
+): Map<string, number> {
+  const cellIndexesByKey = new Map<string, number>();
+  for (let cellIndex = 0; cellIndex < component.cells.length; cellIndex += 1) {
+    cellIndexesByKey.set(cellKey(component.cells[cellIndex]!), cellIndex);
+  }
+
+  const constraints = component.constraints.map((constraint) => ({
+    minesLeft: constraint.minesLeft,
+    cellIndexes: constraint.hidden.map((cell) => cellIndexesByKey.get(cellKey(cell))!),
+  }));
+
+  const cellMemberships = component.cells.map(() => [] as Array<{ constraintIndex: number; position: number }>);
+  const localRiskSums = component.cells.map(() => 0);
+  const localRiskCounts = component.cells.map(() => 0);
+
+  for (let constraintIndex = 0; constraintIndex < constraints.length; constraintIndex += 1) {
+    const constraint = constraints[constraintIndex]!;
+    const localRisk = component.constraints[constraintIndex]!.minesLeft / constraint.cellIndexes.length;
+
+    for (let position = 0; position < constraint.cellIndexes.length; position += 1) {
+      const cellIndex = constraint.cellIndexes[position]!;
+      cellMemberships[cellIndex]!.push({ constraintIndex, position });
+      localRiskSums[cellIndex]! += localRisk;
+      localRiskCounts[cellIndex]! += 1;
+    }
+  }
+
+  const priors = component.cells.map((_, cellIndex) => {
+    const localRisk =
+      localRiskCounts[cellIndex]! > 0
+        ? localRiskSums[cellIndex]! / localRiskCounts[cellIndex]!
+        : defaultRisk;
+    return clampProbability(localRisk, defaultRisk);
+  });
+
+  let variableToConstraint = constraints.map((constraint) =>
+    constraint.cellIndexes.map((cellIndex) => priors[cellIndex]!),
+  );
+  let constraintToVariable = constraints.map((constraint) =>
+    constraint.cellIndexes.map((cellIndex) => priors[cellIndex]!),
+  );
+
+  for (let iteration = 0; iteration < APPROXIMATE_BP_ITERATIONS; iteration += 1) {
+    const nextConstraintToVariable = constraints.map((constraint, constraintIndex) => {
+      const incomingMessages = variableToConstraint[constraintIndex]!;
+
+      return constraint.cellIndexes.map((cellIndex, excludedPosition) => {
+        const countDistribution = Array(constraint.cellIndexes.length).fill(0);
+        countDistribution[0] = 1;
+        let processedCells = 0;
+
+        for (let position = 0; position < constraint.cellIndexes.length; position += 1) {
+          if (position === excludedPosition) {
+            continue;
+          }
+
+          const otherCellIndex = constraint.cellIndexes[position]!;
+          const mineProbability = clampProbability(incomingMessages[position]!, priors[otherCellIndex]!);
+          processedCells += 1;
+
+          for (let mineCount = processedCells; mineCount >= 0; mineCount -= 1) {
+            const previousWithoutMine = countDistribution[mineCount] ?? 0;
+            const previousWithMine =
+              mineCount > 0 ? (countDistribution[mineCount - 1] ?? 0) : 0;
+            countDistribution[mineCount] =
+              previousWithoutMine * (1 - mineProbability) + previousWithMine * mineProbability;
+          }
+        }
+
+        const mineWeight =
+          constraint.minesLeft > 0 ? (countDistribution[constraint.minesLeft - 1] ?? 0) : 0;
+        const safeWeight = countDistribution[constraint.minesLeft] ?? 0;
+        const totalWeight = mineWeight + safeWeight;
+        if (totalWeight <= 0) {
+          return priors[cellIndex]!;
+        }
+
+        return clampProbability(mineWeight / totalWeight, priors[cellIndex]!);
+      });
+    });
+
+    const nextVariableToConstraint = constraints.map((constraint) =>
+      constraint.cellIndexes.map((cellIndex) => priors[cellIndex]!),
+    );
+
+    for (let cellIndex = 0; cellIndex < component.cells.length; cellIndex += 1) {
+      const memberships = cellMemberships[cellIndex]!;
+      const priorLogOdds = probabilityToLogOdds(priors[cellIndex]!);
+      const incomingLogOdds = memberships.map(({ constraintIndex, position }) =>
+        probabilityToLogOdds(nextConstraintToVariable[constraintIndex]![position]!),
+      );
+
+      for (let membershipIndex = 0; membershipIndex < memberships.length; membershipIndex += 1) {
+        let combinedLogOdds = priorLogOdds;
+
+        for (let incomingIndex = 0; incomingIndex < incomingLogOdds.length; incomingIndex += 1) {
+          if (incomingIndex === membershipIndex) {
+            continue;
+          }
+
+          combinedLogOdds += incomingLogOdds[incomingIndex]!;
+        }
+
+        const { constraintIndex, position } = memberships[membershipIndex]!;
+        const updatedProbability = clampProbability(
+          logOddsToProbability(combinedLogOdds),
+          priors[cellIndex]!,
+        );
+        const previousProbability = variableToConstraint[constraintIndex]![position]!;
+        nextVariableToConstraint[constraintIndex]![position] =
+          previousProbability * (1 - APPROXIMATE_BP_DAMPING) +
+          updatedProbability * APPROXIMATE_BP_DAMPING;
+      }
+    }
+
+    constraintToVariable = nextConstraintToVariable;
+    variableToConstraint = nextVariableToConstraint;
+  }
+
+  const riskByKey = new Map<string, number>();
+  for (let cellIndex = 0; cellIndex < component.cells.length; cellIndex += 1) {
+    let combinedLogOdds = probabilityToLogOdds(priors[cellIndex]!);
+
+    for (const { constraintIndex, position } of cellMemberships[cellIndex]!) {
+      combinedLogOdds += probabilityToLogOdds(constraintToVariable[constraintIndex]![position]!);
+    }
+
+    riskByKey.set(
+      cellKey(component.cells[cellIndex]!),
+      clampProbability(logOddsToProbability(combinedLogOdds), priors[cellIndex]!),
+    );
+  }
+
+  return riskByKey;
+}
+
 function combineComponentMineTotalsWithBudget(
   components: ComponentMineTotalAnalysis[],
   remainingMines: number,
@@ -1120,6 +1285,7 @@ function chooseRiskBasedMove(view: GameView): Move | null {
     return null;
   }
 
+  const baseBackgroundRisk = Math.min(1, Math.max(0, view.remainingMinesEstimate / unresolved.length));
   const constraints = collectClueConstraints(view);
   const frontierCellsByKey = new Map<string, CellView>();
   const frontierRiskByKey = new Map<string, number>();
@@ -1151,8 +1317,14 @@ function chooseRiskBasedMove(view: GameView): Move | null {
       inexactComponents.push(component);
       const groupedAnalysis = analyzeComponentMineTotals(component);
       if (!groupedAnalysis) {
+        const approximateRiskByKey = estimateComponentRisksByBeliefPropagation(
+          component,
+          baseBackgroundRisk,
+        );
         for (const cell of component.cells) {
-          fallbackRiskEligibleKeys.add(cellKey(cell));
+          const key = cellKey(cell);
+          fallbackRiskEligibleKeys.add(key);
+          frontierRiskByKey.set(key, approximateRiskByKey.get(key) ?? frontierRiskByKey.get(key)!);
         }
       }
       mineTotalAnalyses.push({
@@ -1222,7 +1394,7 @@ function chooseRiskBasedMove(view: GameView): Move | null {
     }
   }
 
-  let backgroundRisk = Math.min(1, Math.max(0, view.remainingMinesEstimate / unresolved.length));
+  let backgroundRisk = baseBackgroundRisk;
 
   const globalBudget = combineComponentMineTotalsWithBudget(
     mineTotalAnalyses,
