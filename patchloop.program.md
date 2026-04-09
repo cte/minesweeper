@@ -1,4 +1,4 @@
-# deterministic Minesweeper solver
+# Minesweeper solver
 
 This repo is a Patchloop host project.
 
@@ -55,7 +55,7 @@ pnpm patchloop:dashboard:dev
 
 ## Constraints
 
-- The solver must remain deterministic.
-- The solver must not use randomness or external services.
+- The solver may use stochastic logic when it helps, but benchmark behavior should stay reproducible for a fixed board seed.
+- The solver must not use external services.
 - The solver must return legal moves only.
 - Prefer simpler logic when scores are equal.

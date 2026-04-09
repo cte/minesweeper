@@ -1,3 +1,4 @@
+import { createRng } from "./rng.js";
 import { runGame } from "./run-game.js";
 import { createSolver } from "./solver.js";
 import type { GameConfig, Move } from "./types.js";
@@ -70,7 +71,10 @@ function formatMove(move: Move | null): string {
 
 function main(): void {
   const options = parseArgs(process.argv.slice(2));
-  const solver = createSolver();
+  const solver = createSolver({
+    config: options,
+    random: createRng(`solver:${options.seed}`),
+  });
 
   if (options.showSteps) {
     console.log(`Starting game ${options.width}x${options.height} with ${options.mines} mines, seed=${options.seed}`);

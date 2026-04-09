@@ -25,6 +25,11 @@ export interface GameConfig {
   seed: string | number;
 }
 
+export interface SolverContext {
+  config: GameConfig;
+  random: () => number;
+}
+
 export interface GameView extends GameConfig {
   status: GameStatus;
   step: number;
@@ -44,3 +49,5 @@ export interface Solver {
   readonly name: string;
   nextMove(view: GameView): Move | null;
 }
+
+export type SolverFactory = (context: SolverContext) => Solver;

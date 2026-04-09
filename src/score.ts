@@ -52,12 +52,10 @@ function printHelpAndExit(code: number, message?: string): never {
 
 function main(): void {
   const options = parseArgs(process.argv.slice(2));
-  const solver = createSolver();
-  const summary = evaluateBenchmark(options.benchmarkPath, solver);
+  const summary = evaluateBenchmark(options.benchmarkPath, createSolver);
 
   if (options.json) {
-    const output = options.showLosses ? summary : { ...summary, failedCases: [] };
-    console.log(JSON.stringify(output, null, 2));
+    console.log(JSON.stringify(summary, null, 2));
     return;
   }
 

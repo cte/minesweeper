@@ -1,15 +1,19 @@
 import { loadBenchmark } from "./benchmark.js";
+import { createRng } from "./rng.js";
 import { runGame } from "./run-game.js";
-import type { Solver } from "./types.js";
+import type { SolverFactory } from "./types.js";
 
-export interface FailedCase {
+export interface BenchmarkCaseScore {
   id: string;
   suite: string;
   seed: string | number;
   status: string;
+  won: boolean;
   progressScore: number;
   steps: number;
 }
+
+export interface FailedCase extends BenchmarkCaseScore {}
 
 export interface SuiteScore {
   suite: string;
@@ -35,6 +39,7 @@ export interface ScoreSummary {
   avgSteps: number;
   elapsedMs: number;
   suites: SuiteScore[];
+  cases: BenchmarkCaseScore[];
   failedCases: FailedCase[];
 }
 
@@ -46,18 +51,25 @@ interface MutableSuiteStats {
   stepsSum: number;
 }
 
-export function evaluateBenchmark(benchmarkPath: string, solver: Solver): ScoreSummary {
+export function evaluateBenchmark(benchmarkPath: string, createSolver: SolverFactory): ScoreSummary {
   const benchmark = loadBenchmark(benchmarkPath);
   const startedAt = performance.now();
 
+  let solverName = "unknown";
   let wins = 0;
   let stalled = 0;
   let progressSum = 0;
   let stepsSum = 0;
   const suiteStats = new Map<string, MutableSuiteStats>();
+  const cases: BenchmarkCaseScore[] = [];
   const failedCases: FailedCase[] = [];
 
   for (const testCase of benchmark.cases) {
+    const solver = createSolver({
+      config: testCase,
+      random: createRng(`solver:${testCase.seed}`),
+    });
+    solverName = solver.name;
     const result = runGame(testCase, solver);
     wins += result.won ? 1 : 0;
     stalled += result.status === "stalled" ? 1 : 0;
@@ -72,15 +84,19 @@ export function evaluateBenchmark(benchmarkPath: string, solver: Solver): ScoreS
     suite.stepsSum += result.steps;
     suiteStats.set(testCase.suite, suite);
 
+    const caseScore: BenchmarkCaseScore = {
+      id: testCase.id,
+      suite: testCase.suite,
+      seed: testCase.seed,
+      status: result.status,
+      won: result.won,
+      progressScore: result.revealedFraction,
+      steps: result.steps,
+    };
+    cases.push(caseScore);
+
     if (!result.won) {
-      failedCases.push({
-        id: testCase.id,
-        suite: testCase.suite,
-        seed: testCase.seed,
-        status: result.status,
-        progressScore: result.revealedFraction,
-        steps: result.steps,
-      });
+      failedCases.push(caseScore);
     }
   }
 
@@ -105,7 +121,7 @@ export function evaluateBenchmark(benchmarkPath: string, solver: Solver): ScoreS
 
   const summary: ScoreSummary = {
     benchmark: benchmark.name,
-    solver: solver.name,
+    solver: solverName,
     games,
     wins,
     losses,
@@ -115,6 +131,7 @@ export function evaluateBenchmark(benchmarkPath: string, solver: Solver): ScoreS
     avgSteps: games === 0 ? 0 : stepsSum / games,
     elapsedMs,
     suites,
+    cases,
     failedCases,
   };
   if (benchmark.description !== undefined) {

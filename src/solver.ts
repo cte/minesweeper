@@ -1,4 +1,4 @@
-import type { CellView, GameView, Move, Solver } from "./types.js";
+import type { CellView, GameView, Move, Solver, SolverContext } from "./types.js";
 
 interface ClueConstraint {
   cell: CellView;
@@ -1693,6 +1693,6 @@ export class BaselineSolver implements Solver {
   }
 }
 
-export function createSolver(): Solver {
+export function createSolver(_context: SolverContext): Solver {
   return new BaselineSolver();
 }

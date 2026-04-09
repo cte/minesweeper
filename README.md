@@ -1,6 +1,6 @@
 # minesweeper-ts
 
-A deterministic Minesweeper solver host repo for Patchloop.
+A Minesweeper solver host repo for Patchloop.
 
 The project is split into two parts:
 

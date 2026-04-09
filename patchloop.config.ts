@@ -1,7 +1,7 @@
 import { createJsonCommandHooks, definePatchloopConfig } from "@patchloop/core";
 
 export default definePatchloopConfig({
-  projectName: "deterministic Minesweeper solver",
+  projectName: "Minesweeper solver",
   editablePaths: ["src/solver.ts"],
   branchPrefix: "patchloop/",
   metrics: {
@@ -15,7 +15,7 @@ export default definePatchloopConfig({
     rules: [
       "Edit only src/solver.ts.",
       "Do not edit the game engine, benchmarks, or Patchloop wiring.",
-      "Keep the solver deterministic and legal.",
+      "The solver may use seeded stochastic logic if it improves results.",
       "Prefer simpler logic when scores are equal.",
       "Return legal moves only.",
     ],
