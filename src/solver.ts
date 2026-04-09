@@ -221,6 +221,31 @@ function preferGuessCandidate(
   return preferCell(view, current.cell, candidate.cell) === candidate.cell ? candidate : current;
 }
 
+function computeAdaptiveClueGuardWeight(component: FrontierComponent, cell: CellView): number {
+  let membershipCount = 0;
+  let totalConstraintSpan = 0;
+
+  for (const constraint of component.constraints) {
+    if (!constraint.hiddenKeys.has(cellKey(cell))) {
+      continue;
+    }
+
+    membershipCount += 1;
+    totalConstraintSpan += constraint.hidden.length;
+  }
+
+  if (membershipCount === 0) {
+    return 0.25;
+  }
+
+  const averageConstraintSpan = totalConstraintSpan / membershipCount;
+  const densityPressure = component.constraints.length / component.cells.length;
+  const overlapPressure = Math.max(0, membershipCount - 2) * 0.12;
+  const tightNeighborhoodPressure = Math.max(0, 4 - averageConstraintSpan) * 0.08;
+
+  return Math.min(0.7, 0.25 + densityPressure * 0.18 + overlapPressure + tightNeighborhoodPressure);
+}
+
 function collectClueConstraints(view: GameView): ClueConstraint[] {
   const constraints: ClueConstraint[] = [];
 
@@ -1309,6 +1334,7 @@ function chooseRiskBasedMove(view: GameView): Move | null {
   const components = buildFrontierComponents(constraints);
   const inexactComponents: FrontierComponent[] = [];
   const fallbackRiskEligibleKeys = new Set<string>();
+  const fallbackRiskGuardWeightByKey = new Map<string, number>();
   const mineTotalAnalyses: ComponentMineTotalAnalysis[] = [];
   let localExactRiskByKey = new Map<string, number>();
 
@@ -1325,6 +1351,7 @@ function chooseRiskBasedMove(view: GameView): Move | null {
         for (const cell of component.cells) {
           const key = cellKey(cell);
           fallbackRiskEligibleKeys.add(key);
+          fallbackRiskGuardWeightByKey.set(key, computeAdaptiveClueGuardWeight(component, cell));
           frontierRiskByKey.set(key, approximateRiskByKey.get(key) ?? frontierRiskByKey.get(key)!);
         }
       }
@@ -1535,9 +1562,10 @@ function chooseRiskBasedMove(view: GameView): Move | null {
     const directConstraintRisk = fallbackRiskEligibleKeys.has(key)
       ? directConstraintRiskByKey.get(key) ?? null
       : null;
+    const clueGuardWeight = fallbackRiskGuardWeightByKey.get(key) ?? 0.25;
     const effectiveRisk =
       localExactRisk ??
-      (directConstraintRisk === null ? risk : risk + (directConstraintRisk - risk) * 0.25);
+      (directConstraintRisk === null ? risk : risk + (directConstraintRisk - risk) * clueGuardWeight);
 
     bestGuess = preferGuessCandidate(view, bestGuess, {
       cell,
@@ -1546,7 +1574,7 @@ function chooseRiskBasedMove(view: GameView): Move | null {
         localExactRisk === null
           ? directConstraintRisk === null
             ? `guess frontier risk ${effectiveRisk.toFixed(3)}`
-            : `guess frontier risk ${effectiveRisk.toFixed(3)} with clue guard`
+            : `guess frontier risk ${effectiveRisk.toFixed(3)} with adaptive clue guard`
           : `guess local-exact risk ${effectiveRisk.toFixed(3)}`,
     });
   }
