@@ -1302,6 +1302,7 @@ function chooseRiskBasedMove(view: GameView): Move | null {
       }
     }
   }
+  const directConstraintRiskByKey = new Map(frontierRiskByKey);
 
   let forcedSafe: MoveCandidate | null = null;
   let forcedMine: MoveCandidate | null = null;
@@ -1531,14 +1532,21 @@ function chooseRiskBasedMove(view: GameView): Move | null {
       fallbackRiskEligibleKeys.has(key) && localExactRiskByKey.has(key)
         ? localExactRiskByKey.get(key)!
         : null;
-    const effectiveRisk = localExactRisk ?? risk;
+    const directConstraintRisk = fallbackRiskEligibleKeys.has(key)
+      ? directConstraintRiskByKey.get(key) ?? null
+      : null;
+    const effectiveRisk =
+      localExactRisk ??
+      (directConstraintRisk === null ? risk : risk + (directConstraintRisk - risk) * 0.25);
 
     bestGuess = preferGuessCandidate(view, bestGuess, {
       cell,
       risk: effectiveRisk,
       reason:
         localExactRisk === null
-          ? `guess frontier risk ${effectiveRisk.toFixed(3)}`
+          ? directConstraintRisk === null
+            ? `guess frontier risk ${effectiveRisk.toFixed(3)}`
+            : `guess frontier risk ${effectiveRisk.toFixed(3)} with clue guard`
           : `guess local-exact risk ${effectiveRisk.toFixed(3)}`,
     });
   }
