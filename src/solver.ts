@@ -1344,6 +1344,7 @@ function chooseRiskBasedMove(view: GameView): Move | null {
   let forcedMine: MoveCandidate | null = null;
   const components = buildFrontierComponents(constraints);
   const inexactComponents: FrontierComponent[] = [];
+  const localExactOverrideEligibleKeys = new Set<string>();
   const fallbackRiskEligibleKeys = new Set<string>();
   const fallbackRiskGuardWeightByKey = new Map<string, number>();
   const mineTotalAnalyses: ComponentMineTotalAnalysis[] = [];
@@ -1362,6 +1363,7 @@ function chooseRiskBasedMove(view: GameView): Move | null {
         for (const cell of component.cells) {
           const key = cellKey(cell);
           inexactRiskKeys.add(key);
+          localExactOverrideEligibleKeys.add(key);
           fallbackRiskEligibleKeys.add(key);
           fallbackRiskGuardWeightByKey.set(key, computeAdaptiveClueGuardWeight(component, cell));
           frontierRiskByKey.set(key, approximateRiskByKey.get(key) ?? frontierRiskByKey.get(key)!);
@@ -1384,6 +1386,9 @@ function chooseRiskBasedMove(view: GameView): Move | null {
             frontierCellsByKey.set(key, cell);
             frontierRiskByKey.set(key, risk);
             inexactRiskKeys.add(key);
+            if (group.cells.length > 1) {
+              localExactOverrideEligibleKeys.add(key);
+            }
 
             if (risk <= RISK_EPSILON) {
               forcedSafe = preferMoveCandidate(view, forcedSafe, {
@@ -1570,7 +1575,7 @@ function chooseRiskBasedMove(view: GameView): Move | null {
     }
 
     const localExactRisk =
-      fallbackRiskEligibleKeys.has(key) && localExactRiskByKey.has(key)
+      localExactOverrideEligibleKeys.has(key) && localExactRiskByKey.has(key)
         ? localExactRiskByKey.get(key)!
         : null;
     const directConstraintRisk = fallbackRiskEligibleKeys.has(key)
