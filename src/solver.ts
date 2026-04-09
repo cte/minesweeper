@@ -1325,6 +1325,7 @@ function chooseRiskBasedMove(view: GameView): Move | null {
   const frontierRiskByKey = new Map<string, number>();
   const exactRiskKeys = new Set<string>();
   const inexactRiskKeys = new Set<string>();
+  const groupedSingletonRiskKeys = new Set<string>();
 
   for (const constraint of constraints) {
     const localRisk = constraint.minesLeft / constraint.hidden.length;
@@ -1385,7 +1386,11 @@ function chooseRiskBasedMove(view: GameView): Move | null {
             const key = cellKey(cell);
             frontierCellsByKey.set(key, cell);
             frontierRiskByKey.set(key, risk);
-            inexactRiskKeys.add(key);
+            if (group.cells.length === 1) {
+              groupedSingletonRiskKeys.add(key);
+            } else {
+              inexactRiskKeys.add(key);
+            }
             if (group.cells.length > 1) {
               localExactOverrideEligibleKeys.add(key);
             }
@@ -1589,7 +1594,7 @@ function chooseRiskBasedMove(view: GameView): Move | null {
     bestGuess = preferGuessCandidate(view, bestGuess, {
       cell,
       risk: effectiveRisk,
-      certaintyRank: exactRiskKeys.has(key) ? 2 : inexactRiskKeys.has(key) ? 0 : 1,
+      certaintyRank: exactRiskKeys.has(key) || groupedSingletonRiskKeys.has(key) ? 2 : inexactRiskKeys.has(key) ? 0 : 1,
       reason:
         localExactRisk === null
           ? directConstraintRisk === null
