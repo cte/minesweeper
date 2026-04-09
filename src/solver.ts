@@ -40,6 +40,7 @@ interface MoveCandidate {
 interface GuessCandidate extends MoveCandidate {
   risk: number;
   certaintyRank: number;
+  safeProgressScore: number;
 }
 
 interface ComponentMineTotalAnalysis {
@@ -227,7 +228,99 @@ function preferGuessCandidate(
     return candidate.certaintyRank > current.certaintyRank ? candidate : current;
   }
 
+  if (
+    Math.abs(candidate.risk - current.risk) <= GUESS_CERTAINTY_ESCAPE_MARGIN &&
+    Math.abs(candidate.safeProgressScore - current.safeProgressScore) > RISK_EPSILON
+  ) {
+    return candidate.safeProgressScore > current.safeProgressScore ? candidate : current;
+  }
+
   return preferCell(view, current.cell, candidate.cell) === candidate.cell ? candidate : current;
+}
+
+function computeSafeBranchProgressByKey(
+  analyses: ComponentMineTotalAnalysis[],
+  posteriorWeightsByComponent: number[][] | null,
+): Map<string, number> {
+  const safeProgressByKey = new Map<string, number>();
+
+  for (let componentIndex = 0; componentIndex < analyses.length; componentIndex += 1) {
+    const analysis = analyses[componentIndex]!;
+    const componentPosteriorWeights =
+      posteriorWeightsByComponent?.[componentIndex] ?? analysis.solutionCountsByTotal;
+
+    if (analysis.exactAnalysis) {
+      const totalCells = analysis.exactAnalysis.cells.length;
+      for (let cellIndex = 0; cellIndex < totalCells; cellIndex += 1) {
+        const cell = analysis.exactAnalysis.cells[cellIndex]!;
+        const cellMineCountsByTotal = analysis.exactAnalysis.mineCountsByTotal[cellIndex]!;
+        let safeWeight = 0;
+        let safeOtherCellsWeight = 0;
+
+        for (let totalMines = 0; totalMines < cellMineCountsByTotal.length; totalMines += 1) {
+          const posteriorWeight = componentPosteriorWeights[totalMines] ?? 0;
+          if (posteriorWeight === 0) {
+            continue;
+          }
+
+          const mineWeight = cellMineCountsByTotal[totalMines]!;
+          const safeAssignments =
+            analysis.exactAnalysis.solutionCountsByTotal[totalMines]! * posteriorWeight - mineWeight;
+          if (safeAssignments <= 0) {
+            continue;
+          }
+
+          safeWeight += safeAssignments;
+          safeOtherCellsWeight += safeAssignments * (totalCells - totalMines - 1);
+        }
+
+        if (safeWeight > 0) {
+          safeProgressByKey.set(cellKey(cell), safeOtherCellsWeight / safeWeight);
+        }
+      }
+
+      continue;
+    }
+
+    if (!analysis.groupedAnalysis) {
+      continue;
+    }
+
+    const totalCells = analysis.cells.length;
+    for (const group of analysis.groupedAnalysis.groups) {
+      let safeWeight = 0;
+      let safeOtherCellsWeight = 0;
+
+      for (let totalMines = 0; totalMines < group.mineCountsByTotal.length; totalMines += 1) {
+        const posteriorWeight = componentPosteriorWeights[totalMines] ?? 0;
+        if (posteriorWeight === 0) {
+          continue;
+        }
+
+        const mineWeight = group.mineCountsByTotal[totalMines]!;
+        const safeAssignments =
+          analysis.groupedAnalysis.solutionCountsByTotal[totalMines]! * group.cells.length * posteriorWeight -
+          mineWeight;
+        if (safeAssignments <= 0) {
+          continue;
+        }
+
+        safeWeight += safeAssignments;
+        safeOtherCellsWeight += safeAssignments * (totalCells - totalMines - 1);
+      }
+
+      if (safeWeight <= 0) {
+        continue;
+      }
+
+      const progressScore = safeOtherCellsWeight / safeWeight;
+      for (const cell of group.cells) {
+        safeProgressByKey.set(cellKey(cell), progressScore);
+      }
+    }
+  }
+
+  return safeProgressByKey;
 }
 
 function computeAdaptiveClueGuardWeight(component: FrontierComponent, cell: CellView): number {
@@ -1447,6 +1540,7 @@ function chooseRiskBasedMove(view: GameView): Move | null {
   }
 
   let backgroundRisk = baseBackgroundRisk;
+  let safeBranchProgressByKey = computeSafeBranchProgressByKey(mineTotalAnalyses, null);
 
   const globalBudget = combineComponentMineTotalsWithBudget(
     mineTotalAnalyses,
@@ -1456,6 +1550,10 @@ function chooseRiskBasedMove(view: GameView): Move | null {
 
   if (globalBudget) {
     backgroundRisk = globalBudget.offFrontierRisk ?? backgroundRisk;
+    safeBranchProgressByKey = computeSafeBranchProgressByKey(
+      mineTotalAnalyses,
+      globalBudget.posteriorWeightsByComponent,
+    );
 
     for (const [key, risk] of globalBudget.frontierRiskByKey) {
       frontierRiskByKey.set(key, risk);
@@ -1595,6 +1693,7 @@ function chooseRiskBasedMove(view: GameView): Move | null {
       cell,
       risk: effectiveRisk,
       certaintyRank: exactRiskKeys.has(key) || groupedSingletonRiskKeys.has(key) ? 2 : inexactRiskKeys.has(key) ? 0 : 1,
+      safeProgressScore: safeBranchProgressByKey.get(key) ?? 0,
       reason:
         localExactRisk === null
           ? directConstraintRisk === null
@@ -1613,6 +1712,7 @@ function chooseRiskBasedMove(view: GameView): Move | null {
       cell,
       risk: backgroundRisk,
       certaintyRank: 1,
+      safeProgressScore: 0,
       reason: `guess global risk ${backgroundRisk.toFixed(3)}`,
     });
   }
