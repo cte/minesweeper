@@ -39,6 +39,7 @@ interface MoveCandidate {
 
 interface GuessCandidate extends MoveCandidate {
   risk: number;
+  certaintyRank: number;
 }
 
 interface ComponentMineTotalAnalysis {
@@ -64,6 +65,7 @@ const APPROXIMATE_BP_ITERATIONS = 8;
 const APPROXIMATE_BP_DAMPING = 0.6;
 const APPROXIMATE_BP_EPSILON = 1e-6;
 const RISK_EPSILON = 1e-9;
+const GUESS_CERTAINTY_ESCAPE_MARGIN = 0.012;
 
 function combinationCount(total: number, selected: number): number {
   if (selected < 0 || selected > total) {
@@ -216,6 +218,13 @@ function preferGuessCandidate(
 
   if (candidate.risk > current.risk + RISK_EPSILON) {
     return current;
+  }
+
+  if (
+    candidate.certaintyRank !== current.certaintyRank &&
+    Math.abs(candidate.risk - current.risk) <= GUESS_CERTAINTY_ESCAPE_MARGIN
+  ) {
+    return candidate.certaintyRank > current.certaintyRank ? candidate : current;
   }
 
   return preferCell(view, current.cell, candidate.cell) === candidate.cell ? candidate : current;
@@ -1314,6 +1323,8 @@ function chooseRiskBasedMove(view: GameView): Move | null {
   const constraints = collectClueConstraints(view);
   const frontierCellsByKey = new Map<string, CellView>();
   const frontierRiskByKey = new Map<string, number>();
+  const exactRiskKeys = new Set<string>();
+  const inexactRiskKeys = new Set<string>();
 
   for (const constraint of constraints) {
     const localRisk = constraint.minesLeft / constraint.hidden.length;
@@ -1350,6 +1361,7 @@ function chooseRiskBasedMove(view: GameView): Move | null {
         );
         for (const cell of component.cells) {
           const key = cellKey(cell);
+          inexactRiskKeys.add(key);
           fallbackRiskEligibleKeys.add(key);
           fallbackRiskGuardWeightByKey.set(key, computeAdaptiveClueGuardWeight(component, cell));
           frontierRiskByKey.set(key, approximateRiskByKey.get(key) ?? frontierRiskByKey.get(key)!);
@@ -1371,6 +1383,7 @@ function chooseRiskBasedMove(view: GameView): Move | null {
             const key = cellKey(cell);
             frontierCellsByKey.set(key, cell);
             frontierRiskByKey.set(key, risk);
+            inexactRiskKeys.add(key);
 
             if (risk <= RISK_EPSILON) {
               forcedSafe = preferMoveCandidate(view, forcedSafe, {
@@ -1404,6 +1417,7 @@ function chooseRiskBasedMove(view: GameView): Move | null {
 
       frontierCellsByKey.set(key, cell);
       frontierRiskByKey.set(key, risk);
+      exactRiskKeys.add(key);
 
       if (mineCount === 0) {
         forcedSafe = preferMoveCandidate(view, forcedSafe, {
@@ -1570,6 +1584,7 @@ function chooseRiskBasedMove(view: GameView): Move | null {
     bestGuess = preferGuessCandidate(view, bestGuess, {
       cell,
       risk: effectiveRisk,
+      certaintyRank: exactRiskKeys.has(key) ? 2 : inexactRiskKeys.has(key) ? 0 : 1,
       reason:
         localExactRisk === null
           ? directConstraintRisk === null
@@ -1587,6 +1602,7 @@ function chooseRiskBasedMove(view: GameView): Move | null {
     bestGuess = preferGuessCandidate(view, bestGuess, {
       cell,
       risk: backgroundRisk,
+      certaintyRank: 1,
       reason: `guess global risk ${backgroundRisk.toFixed(3)}`,
     });
   }
