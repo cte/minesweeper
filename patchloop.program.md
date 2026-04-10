@@ -23,6 +23,12 @@ Those files are the fixed environment and evaluation harness.
 
 Improve the solver on the fixed evaluation benchmark.
 
+Patchloop now runs three benchmark layers:
+
+- `pnpm score:search` as a broad cheap discriminator
+- `pnpm score` as the main acceptance benchmark
+- `pnpm score:holdout` as the generalization guard
+
 Primary metric:
 
 - `win_rate` from `pnpm score`
@@ -59,3 +65,4 @@ pnpm patchloop:dashboard:dev
 - The solver must not use external services.
 - The solver must return legal moves only.
 - Prefer simpler logic when scores are equal.
+- Do not chase a tiny `progress_score` bump by overfitting one frontier-guess variant if it weakens holdout behavior.

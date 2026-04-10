@@ -1,0 +1,60 @@
+{
+  "name": "search-v1",
+  "description": "Broad fast benchmark for filtering candidate ideas before full eval. Larger and more expert-heavy than eval, but still cheap enough to run every iteration.",
+  "suites": [
+    {
+      "label": "beginner",
+      "width": 9,
+      "height": 9,
+      "mines": 10,
+      "seedPrefix": "search-beginner",
+      "start": 401,
+      "count": 16
+    },
+    {
+      "label": "intermediate",
+      "width": 16,
+      "height": 16,
+      "mines": 40,
+      "seedPrefix": "search-intermediate",
+      "start": 401,
+      "count": 28
+    },
+    {
+      "label": "intermediate-dense",
+      "width": 16,
+      "height": 16,
+      "mines": 56,
+      "seedPrefix": "search-intermediate-dense",
+      "start": 401,
+      "count": 28
+    },
+    {
+      "label": "expert",
+      "width": 30,
+      "height": 16,
+      "mines": 99,
+      "seedPrefix": "search-expert",
+      "start": 401,
+      "count": 72
+    },
+    {
+      "label": "expert-dense",
+      "width": 30,
+      "height": 16,
+      "mines": 120,
+      "seedPrefix": "search-expert-dense",
+      "start": 401,
+      "count": 56
+    },
+    {
+      "label": "expert-tall",
+      "width": 20,
+      "height": 24,
+      "mines": 99,
+      "seedPrefix": "search-expert-tall",
+      "start": 401,
+      "count": 40
+    }
+  ]
+}

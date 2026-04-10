@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { loadBenchmark } from "./benchmark.js";
 import { createRng } from "./rng.js";
 import { runGame } from "./run-game.js";
@@ -41,6 +43,11 @@ export interface ScoreSummary {
   suites: SuiteScore[];
   cases: BenchmarkCaseScore[];
   failedCases: FailedCase[];
+  behavior: {
+    fingerprint: string;
+    unitsLabel: "cases";
+    observedUnits: number;
+  };
 }
 
 interface MutableSuiteStats {
@@ -49,6 +56,13 @@ interface MutableSuiteStats {
   stalled: number;
   progressSum: number;
   stepsSum: number;
+}
+
+function behaviorFingerprint(benchmarkName: string, cases: BenchmarkCaseScore[]): string {
+  const signature = cases
+    .map((entry) => `${entry.id}|${entry.status}|${entry.won ? 1 : 0}|${entry.progressScore.toFixed(6)}|${entry.steps}`)
+    .join("\n");
+  return `sha256:${createHash("sha256").update(`${benchmarkName}\n${signature}`).digest("hex")}`;
 }
 
 export function evaluateBenchmark(benchmarkPath: string, createSolver: SolverFactory): ScoreSummary {
@@ -133,6 +147,11 @@ export function evaluateBenchmark(benchmarkPath: string, createSolver: SolverFac
     suites,
     cases,
     failedCases,
+    behavior: {
+      fingerprint: behaviorFingerprint(benchmark.name, cases),
+      unitsLabel: "cases",
+      observedUnits: cases.length,
+    },
   };
   if (benchmark.description !== undefined) {
     summary.description = benchmark.description;
