@@ -115,6 +115,12 @@ export default definePatchloopConfig({
     searchCommand: ["pnpm", "score:search", "--", "--json"],
     evalCommand: ["pnpm", "score", "--", "--json"],
     holdoutCommand: ["pnpm", "score:holdout", "--", "--json"],
+    timeoutsMs: {
+      check: 15_000,
+      search: 15_000,
+      eval: 30_000,
+      holdout: 20_000,
+    },
     candidatePath: "solver",
     primaryPath: "winRate",
     secondaryPath: "progressScore",
